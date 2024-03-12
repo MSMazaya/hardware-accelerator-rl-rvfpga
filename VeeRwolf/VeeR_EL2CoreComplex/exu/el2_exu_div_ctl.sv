@@ -217,83 +217,6 @@ import el2_pkg::*;
         .ram_data_out (ram_data_out)
    );
 
-  // q_learn q_learn(
-  //   .clk (clk),
-  //   .rst (rst),
-  //   .ram_write_enable (ram_write_enable),
-  //   .ram_address (ram_address_reg),
-  //   .ram_data_in (ram_data_in),
-  //   .ram_data_out (ram_data_out)
-  // );
-
-   // FP
-   // adder FloatingPointAdder(
-   //      .input_a(divisor_fp),
-   //      .input_b(dividend_fp),
-   //      .input_a_stb(dp_fp_add_ini),
-   //      .input_b_stb(1'b1),
-   //      .output_z_ack(1'b1),
-   //      .clk(clk),
-   //      .rst(1'b0),
-   //      .output_z(out_fp_add),
-   //      .output_z_stb(out_fp_add_stb),
-   //      .input_a_ack(),
-   //      .input_b_ack(),
-   //      .ram_write_enable(ram_write_enable),
-   //      .ram_address(ram_address_reg),
-   //      .ram_data_in(ram_data_in),
-   //      .ram_data_out(ram_data_out)
-   //      );
-
-
-   // FP
-   // q_learn q_learn_module(
-   //      .is_learn(dp_fp_mul_ini),
-   //      .clk (clk),
-   //      .rst (rst_l),
-   //      .output_max (out_fp_mul),
-   //      .output_max_done (out_fp_mul_stb),
-   //      .ram_write_enable (ram_write_enable),
-   //      .ram_read_enable (ram_read_enable),
-   //      .ram_address (ram_address),
-   //      .ram_data_in (ram_data_in),
-   //      .ram_read_done (ram_read_done),
-   //      .ram_data_out (ram_data_out)
-   // );
-
-   // multiplier FloatingPointMultiplier(
-   //      .input_a(divisor_fp),
-   //      .input_b(dividend_fp),
-   //      .input_a_stb(dp_fp_mul_ini),
-   //      .input_b_stb(1'b1),
-   //      .output_z_ack(1'b1),
-   //      .clk(clk),
-   //      .rst(1'b0),
-   //      .output_z(out_fp_mul),
-   //      .output_z_stb(out_fp_mul_stb),
-   //      .input_a_ack(),
-   //      .input_b_ack());
-
-
-   // FP
-   // divider FloatingPointDiv(
-   //      .input_a(divisor_fp),
-   //      .input_b(dividend_fp),
-   //      .input_a_stb(dp_fp_div_ini),
-   //      .input_b_stb(1'b1),
-   //      .output_z_ack(1'b1),
-   //      .clk(clk),
-   //      .rst(1'b0),
-   //      .output_z(out_fp_div),
-   //      .output_z_stb(out_fp_div_stb),
-   //      .input_a_ack(),
-   //      .input_b_ack(),
-   //      .ram_write_enable(ram_write_enable),
-   //      .ram_address(ram_address_reg),
-   //      .ram_data_out(ram_data_out)
-   //      );
-
-
 endmodule // el2_exu_div_ctl
 
 module ram_lsu(
@@ -349,7 +272,6 @@ module ram_lsu(
   reg       [31:0] ram_address_reg, ram_data_in_reg;
   reg       [31:0] output_store_reg, output_load_reg, output_learn_reg;
   reg       ram_write_enable_reg, ram_read_enable_reg;
-          
   reg       output_store_done_reg, output_load_done_reg, output_learn_done_reg;
 
   always @(posedge clk)
@@ -367,8 +289,23 @@ module ram_lsu(
               compare_max_candidate:
               begin
                 if(ram_read_done) begin
-                  // FIX: https://stackoverflow.com/questions/33678827/compare-floating-point-numbers-as-integers
-                  if(ram_data_out > max_q) begin
+                  /* Identical to floating-point comparison when:
+                    - Both numbers are positive, positive-zero, or positive-infinity.
+                    - One positive and one negative number, and you are using a signed integer comparison.
+                    Inverse of floating-point comparison when:
+                    - Both numbers are negative, negative-zero, or negative-infinity.
+                  */
+                  // both positive (S = 0)
+                  if(!ram_data_out[31] & !max_q[31]) begin
+                    if(ram_data_out[30:0] > max_q[30:0])
+                      max_q <= ram_data_out;
+                  // one negative and one positive
+                  end else if(ram_data_out[31] ^ max_q[31]) begin
+                    if(max_q[31])
+                      max_q <= ram_data_out;
+                  // both negative
+                  end else if(ram_data_out[31] & max_q[31]) begin
+                    if(ram_data_out[30:0] < max_q[30:0])
                       max_q <= ram_data_out;
                   end
                   learn_state <= get_max_candidate;
