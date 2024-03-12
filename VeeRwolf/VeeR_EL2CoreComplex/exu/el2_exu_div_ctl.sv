@@ -176,37 +176,55 @@ import el2_pkg::*;
                                           : (finish_dly_div) ) );
 
 
+  logic ram_read_done;
   logic ram_write_enable;
+  logic ram_read_enable;
   logic [31:0]ram_address;
   logic [31:0]ram_data_in;
   logic [31:0]ram_data_out;
+  // FIX: why?????? dude why did I make this a `reg`
   reg   [31:0]ram_address_reg;
 
-   ram ram(
-       .clk (clk),
-       .write_enable (ram_write_enable),
-       .address (ram_address),
-       .data_in (ram_data_in),
-       .data_out (ram_data_out)
-   );
+  ram ram(
+      .clk (clk),
+      .write_enable (ram_write_enable),
+      .read_enable (ram_read_enable),
+      .address (ram_address),
+      .data_in (ram_data_in),
+      .data_out (ram_data_out),
+      .read_done (ram_read_done)
+  );
 
    ram_lsu lsu(
+        .is_learn(dp_fp_mul_ini),
         .input_address (divisor_fp),
         .input_value (dividend_fp),
         .is_store (dp_fp_add_ini),
         .is_load (dp_fp_div_ini),
         .clk (clk),
-        .rst (rst),
+        .rst (rst_l),
         .output_store (out_fp_add),
         .output_load (out_fp_div),
+        .output_learn (out_fp_mul),
+        .output_learn_done (out_fp_mul_stb),
         .output_store_done (out_fp_add_stb),
         .output_load_done (out_fp_div_stb),
-        .ram_write_enable(ram_write_enable),
-        .ram_address(ram_address_reg),
-        .ram_data_in(ram_data_in),
-        .ram_data_out(ram_data_out)
+        .ram_write_enable (ram_write_enable),
+        .ram_read_enable (ram_read_enable),
+        .ram_address (ram_address),
+        .ram_data_in (ram_data_in),
+        .ram_read_done (ram_read_done),
+        .ram_data_out (ram_data_out)
    );
 
+  // q_learn q_learn(
+  //   .clk (clk),
+  //   .rst (rst),
+  //   .ram_write_enable (ram_write_enable),
+  //   .ram_address (ram_address_reg),
+  //   .ram_data_in (ram_data_in),
+  //   .ram_data_out (ram_data_out)
+  // );
 
    // FP
    // adder FloatingPointAdder(
@@ -229,18 +247,32 @@ import el2_pkg::*;
 
 
    // FP
-   multiplier FloatingPointMultiplier(
-        .input_a(divisor_fp),
-        .input_b(dividend_fp),
-        .input_a_stb(dp_fp_mul_ini),
-        .input_b_stb(1'b1),
-        .output_z_ack(1'b1),
-        .clk(clk),
-        .rst(1'b0),
-        .output_z(out_fp_mul),
-        .output_z_stb(out_fp_mul_stb),
-        .input_a_ack(),
-        .input_b_ack());
+   // q_learn q_learn_module(
+   //      .is_learn(dp_fp_mul_ini),
+   //      .clk (clk),
+   //      .rst (rst_l),
+   //      .output_max (out_fp_mul),
+   //      .output_max_done (out_fp_mul_stb),
+   //      .ram_write_enable (ram_write_enable),
+   //      .ram_read_enable (ram_read_enable),
+   //      .ram_address (ram_address),
+   //      .ram_data_in (ram_data_in),
+   //      .ram_read_done (ram_read_done),
+   //      .ram_data_out (ram_data_out)
+   // );
+
+   // multiplier FloatingPointMultiplier(
+   //      .input_a(divisor_fp),
+   //      .input_b(dividend_fp),
+   //      .input_a_stb(dp_fp_mul_ini),
+   //      .input_b_stb(1'b1),
+   //      .output_z_ack(1'b1),
+   //      .clk(clk),
+   //      .rst(1'b0),
+   //      .output_z(out_fp_mul),
+   //      .output_z_stb(out_fp_mul_stb),
+   //      .input_a_ack(),
+   //      .input_b_ack());
 
 
    // FP
@@ -264,9 +296,277 @@ import el2_pkg::*;
 
 endmodule // el2_exu_div_ctl
 
+module ram_lsu(
+        input_address,
+        input_value,
+        is_store,
+        is_load,
+        is_learn,
+        clk,
+        rst,
+        output_store,
+        output_load,
+        output_learn,
+        output_learn_done,
+        output_store_done,
+        output_load_done,
+        ram_write_enable,
+        ram_read_enable,
+        ram_address,
+        ram_data_in,
+        ram_data_out,
+        ram_read_done
+      );
 
+  input     [31:0] input_address, input_value;
+  input     is_store, is_load, is_learn;
+  input     clk;
+  input     rst;
 
+  output    [31:0] output_store, output_load, output_learn;
+  output    output_store_done, output_load_done, output_learn_done;
 
+  output    ram_write_enable;
+  output    ram_read_enable;
+  output    [31:0]ram_address;
+  output    [31:0]ram_data_in;
+  input     ram_read_done;
+  input     [31:0]ram_data_out;
+
+  reg [1:0] lsu_state;
+  parameter get_input_address = 2'd0,
+            get_input_value   = 2'd1,
+            store_or_load     = 2'd2,
+            write_output      = 2'd3;
+
+  reg       learn_state;
+  parameter get_max_candidate     = 1'd0,
+            compare_max_candidate = 1'd1;
+  reg       [2:0]i_action;
+  reg       [31:0]max_q;
+
+  reg       [31:0] input_address_reg, input_value_reg;
+  reg       [31:0] ram_address_reg, ram_data_in_reg;
+  reg       [31:0] output_store_reg, output_load_reg, output_learn_reg;
+  reg       ram_write_enable_reg, ram_read_enable_reg;
+          
+  reg       output_store_done_reg, output_load_done_reg, output_learn_done_reg;
+
+  always @(posedge clk)
+  begin
+    if(is_learn) begin
+      if(i_action != 4) begin
+          case(learn_state)
+              get_max_candidate:
+              begin
+                ram_read_enable_reg <= 1;
+                ram_address_reg <= ram_address_reg + 1;
+                learn_state <= compare_max_candidate;
+              end
+
+              compare_max_candidate:
+              begin
+                if(ram_read_done) begin
+                  // FIX: https://stackoverflow.com/questions/33678827/compare-floating-point-numbers-as-integers
+                  if(ram_data_out > max_q) begin
+                      max_q <= ram_data_out;
+                  end
+                  learn_state <= get_max_candidate;
+                  i_action <= i_action + 1;
+                  ram_read_enable_reg <= 0;
+                end
+              end
+          endcase
+      end else begin
+          output_learn_done_reg <= 1;
+          if(output_learn_done) begin
+            ram_read_enable_reg <= 0;
+            output_learn_done_reg <= 0;
+            output_learn_reg <= max_q;
+            i_action <= 0;
+          end
+      end
+    end
+  end
+
+  assign output_learn_done = output_learn_done_reg;
+  assign output_learn = output_learn_reg;
+
+  always @(posedge clk)
+  begin
+    case(lsu_state)
+      // NOTE: somehow get_input_address and get_input_value (putting to registers)
+      // make the operation fails? the ack came sometimes after 7 clock, crazy
+      get_input_address:
+      begin
+        if (is_store || is_load) begin
+          input_address_reg <= input_address;
+          lsu_state <= get_input_value;
+        end
+      end
+
+      get_input_value:
+      begin
+        input_value_reg <= input_value;
+        lsu_state <= store_or_load;
+      end
+
+      store_or_load:
+      begin
+        ram_address_reg <= input_address_reg;
+        ram_write_enable_reg <= is_store;
+        ram_read_enable_reg <= is_load;
+        ram_data_in_reg <= input_value_reg;
+        lsu_state <= write_output;
+      end
+
+      write_output:
+      begin
+        if(is_store) begin
+          output_store_done_reg <= 1;
+          output_store_reg <= 1;
+          if (output_store_done_reg) begin
+            output_store_done_reg <= 0;
+            ram_write_enable_reg <= 0;
+            lsu_state <= get_input_address;
+          end
+        end else if(is_load && ram_read_done) begin
+          output_load_done_reg <= 1;
+          output_load_reg <= ram_data_out;
+          if (output_load_done_reg) begin
+            output_load_done_reg <= 0;
+            ram_read_enable_reg <= 0;
+            lsu_state <= get_input_address;
+          end
+        end 
+        if (!is_store && !is_load) begin
+          output_store_done_reg <= 0;
+          output_load_done_reg <= 0;
+          lsu_state <= get_input_address;
+        end
+      end
+    endcase
+
+  end
+
+  assign output_load = output_load_reg;
+  assign output_store = output_store_reg;
+  assign output_store_done = output_store_done_reg;
+  assign output_load_done = output_load_done_reg;
+  assign ram_data_in = ram_data_in_reg;
+  assign ram_address = ram_address_reg;
+  assign ram_write_enable = ram_write_enable_reg;
+  assign ram_read_enable = ram_read_enable_reg;
+endmodule
+
+module q_learn(
+    is_learn,
+    clk,
+    rst,
+    output_max,
+    output_max_done,
+    ram_write_enable,
+    ram_read_enable,
+    ram_address,
+    ram_data_in,
+    ram_data_out,
+    ram_read_done
+  );
+  input     is_learn;
+  input     clk;
+  input     rst;
+
+  output    output_max_done;
+  output    [31:0] output_max;
+
+  output    ram_write_enable;
+  output    ram_read_enable;
+  output    [31:0]ram_address;
+  output    [31:0]ram_data_in;
+  input     ram_read_done;
+  input     [31:0]ram_data_out;
+
+  reg [1:0] state;
+  parameter get_data        = 1'd0,
+            compare_data    = 1'd1;
+
+  reg       [31:0]max_q;
+  reg       [2:0]i_action;
+  reg       [31:0] ram_address_reg, ram_data_in_reg;
+  reg       ram_write_enable_reg, ram_read_enable_reg;
+  reg       output_max_done_reg;
+  reg       [31:0] output_max_reg;
+
+  always @(posedge clk)
+  begin
+    if(is_learn) begin
+      if(i_action != 4) begin
+          case(state)
+              get_data:
+              begin
+                ram_read_enable_reg <= 1;
+                ram_address_reg <= ram_address_reg + 1;
+                state <= compare_data;
+              end
+              compare_data:
+              begin
+                if(ram_read_done) begin
+                  // FIX: https://stackoverflow.com/questions/33678827/compare-floating-point-numbers-as-integers
+                  if(ram_data_out > max_q) begin
+                      max_q <= ram_data_out;
+                  end
+                  state <= get_data;
+                  i_action <= i_action + 1;
+                  ram_read_enable_reg <= 0;
+                end
+              end
+          endcase
+      end else begin
+          output_max_done_reg <= 1;
+          if(output_max_done) begin
+            ram_read_enable_reg <= 0;
+            output_max_done_reg <= 0;
+            output_max_reg <= max_q;
+            i_action <= 0;
+          end
+      end
+    end
+  end
+
+  assign output_max_done = output_max_done_reg;
+  assign output_max = output_max_reg;
+  assign ram_data_in = ram_data_in_reg;
+  assign ram_address = ram_address_reg;
+  assign ram_write_enable = ram_write_enable_reg;
+  assign ram_read_enable = ram_read_enable_reg;
+endmodule
+
+module ram(
+    input clk,
+    input write_enable,
+    input [31:0]address,
+    input [31:0]data_in,
+    input [31:0]read_enable,
+    output reg read_done,
+    output reg [31:0]data_out
+);
+
+reg [31:0]ram_block[0:1023];
+
+always @(posedge clk) begin
+        if(read_done)
+          read_done <= 0;
+
+        if(write_enable)
+            ram_block[address] <= data_in;
+
+        if(read_enable) begin
+            data_out <= ram_block[address];
+            read_done <= 1;
+        end
+end
+
+endmodule
 
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
