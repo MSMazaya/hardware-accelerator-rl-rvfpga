@@ -182,8 +182,6 @@ import el2_pkg::*;
   logic [31:0]ram_address;
   logic [31:0]ram_data_in;
   logic [31:0]ram_data_out;
-  // FIX: why?????? dude why did I make this a `reg`
-  reg   [31:0]ram_address_reg;
 
   ram ram(
       .clk (clk),
@@ -195,12 +193,12 @@ import el2_pkg::*;
       .read_done (ram_read_done)
   );
 
-   ram_lsu lsu(
-        .is_learn(dp_fp_mul_ini),
+   hardware_accelerator hw_accel(
         .input_address (divisor_fp),
         .input_value (dividend_fp),
         .is_store (dp_fp_add_ini),
         .is_load (dp_fp_div_ini),
+        .is_learn(dp_fp_mul_ini),
         .clk (clk),
         .rst (rst_l),
         .output_store (out_fp_add),
@@ -219,7 +217,7 @@ import el2_pkg::*;
 
 endmodule // el2_exu_div_ctl
 
-module ram_lsu(
+module hardware_accelerator(
         input_address,
         input_value,
         is_store,
@@ -266,6 +264,14 @@ module ram_lsu(
   parameter get_max_candidate     = 1'd0,
             compare_max_candidate = 1'd1;
   reg       [2:0]i_action;
+  // 10 bits -> 1023 max, episode goes up to 1000
+  reg       [6:0]current_episode;
+  parameter max_episode = 10'd1000;
+  reg       [1:0]chosen_action;
+  parameter action_up       = 1'd0,
+            action_down     = 1'd2,
+            action_left     = 1'd3,
+            action_right    = 1'd3;
   reg       [31:0]max_q;
 
   reg       [31:0] input_address_reg, input_value_reg;
@@ -277,15 +283,15 @@ module ram_lsu(
   always @(posedge clk)
   begin
     if(is_learn) begin
+      if(i_action == 0)
+        ram_address_reg <= 0; // change this to input user later
       if(i_action != 4) begin
           case(learn_state)
               get_max_candidate:
               begin
                 ram_read_enable_reg <= 1;
-                ram_address_reg <= ram_address_reg + 1;
                 learn_state <= compare_max_candidate;
               end
-
               compare_max_candidate:
               begin
                 if(ram_read_done) begin
@@ -311,26 +317,21 @@ module ram_lsu(
                   learn_state <= get_max_candidate;
                   i_action <= i_action + 1;
                   ram_read_enable_reg <= 0;
+                  ram_address_reg <= ram_address_reg + 1;
                 end
               end
           endcase
       end else begin
           output_learn_done_reg <= 1;
+          output_learn_reg <= max_q;
           if(output_learn_done) begin
             ram_read_enable_reg <= 0;
             output_learn_done_reg <= 0;
-            output_learn_reg <= max_q;
             i_action <= 0;
           end
       end
     end
-  end
 
-  assign output_learn_done = output_learn_done_reg;
-  assign output_learn = output_learn_reg;
-
-  always @(posedge clk)
-  begin
     case(lsu_state)
       // NOTE: somehow get_input_address and get_input_value (putting to registers)
       // make the operation fails? the ack came sometimes after 7 clock, crazy
@@ -386,6 +387,8 @@ module ram_lsu(
 
   end
 
+  assign output_learn_done = output_learn_done_reg;
+  assign output_learn = output_learn_reg;
   assign output_load = output_load_reg;
   assign output_store = output_store_reg;
   assign output_store_done = output_store_done_reg;
