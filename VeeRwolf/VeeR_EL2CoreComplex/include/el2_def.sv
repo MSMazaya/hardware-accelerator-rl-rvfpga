@@ -204,6 +204,7 @@ typedef struct packed {
                        logic fp_add;
                        logic fp_mul;
                        logic fp_div;
+                       logic q_update;
                        logic clz;
                        logic ctz;
                        logic cpop;
@@ -340,6 +341,7 @@ typedef struct packed {
                        logic fp_add;
                        logic fp_mul;
                        logic fp_div;
+                       logic q_update;
                        } fp_pkt_t;
 
 typedef struct packed {

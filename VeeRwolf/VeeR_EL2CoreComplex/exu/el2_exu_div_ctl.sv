@@ -140,9 +140,13 @@ import el2_pkg::*;
    logic [31:0]  out_fp_div;
    logic         out_fp_div_stb;
    logic         out_fp_div_stb_delayed;
+   logic [31:0]  out_q_update;
+   logic         out_q_update_stb;
+   logic         out_q_update_stb_delayed;
    logic         dp_fp_add_ini;
    logic         dp_fp_mul_ini;
    logic         dp_fp_div_ini;
+   logic         dp_q_update_ini;
 
    // FP
    rvdffe #(32) divis_fp          (.*, .en(dp.valid),    .din(divisor[31:0]),  .dout(divisor_fp[31:0]));
@@ -150,9 +154,11 @@ import el2_pkg::*;
    rvdff #(1)   dp_fp_str_add     (.*, .din(out_fp_add_stb),          .dout(out_fp_add_stb_delayed));
    rvdff #(1)   dp_fp_str_mul     (.*, .din(out_fp_mul_stb),          .dout(out_fp_mul_stb_delayed));
    rvdff #(1)   dp_fp_str_div     (.*, .din(out_fp_div_stb),          .dout(out_fp_div_stb_delayed));
+   rvdff #(1)   dp_q_str_update   (.*, .din(out_q_update_stb),        .dout(out_q_update_stb_delayed));
    rvdffe #(32) dp_fp_add         (.*, .en(dp.valid || out_fp_add_stb_delayed),    .din(fp_p.fp_add),          .dout(dp_fp_add_ini));
    rvdffe #(32) dp_fp_mul         (.*, .en(dp.valid || out_fp_mul_stb_delayed),    .din(fp_p.fp_mul),          .dout(dp_fp_mul_ini));
    rvdffe #(32) dp_fp_div         (.*, .en(dp.valid || out_fp_div_stb_delayed),    .din(fp_p.fp_div),          .dout(dp_fp_div_ini));
+   rvdffe #(32) dp_q_update       (.*, .en(dp.valid || out_q_update_stb_delayed),  .din(fp_p.q_update),        .dout(dp_q_update_ini));
 
 
    // assign out[31:0] = {32{finish_dly}} & out_raw[31:0];     // Qualification added to quiet result bus while divide is iterating
@@ -163,7 +169,9 @@ import el2_pkg::*;
                                        ? out_fp_mul 
                                        : (dp_fp_div_ini
                                           ? out_fp_div
-                                          : ({32{finish_dly}} & out_raw[31:0]) ) );
+                                          : (dp_q_update_ini
+                                            ? out_q_update
+                                            : ({32{finish_dly}} & out_raw[31:0]) ) ) );
 
 
    // FP
@@ -173,7 +181,9 @@ import el2_pkg::*;
                                        ? (out_fp_mul_stb)
                                        : (dp_fp_div_ini
                                           ? (out_fp_div_stb)
-                                          : (finish_dly_div) ) );
+                                          : (dp_q_update_ini
+                                            ? (out_q_update_stb)
+                                            : (finish_dly_div) ) ) );
 
 
   logic ram_read_done;
