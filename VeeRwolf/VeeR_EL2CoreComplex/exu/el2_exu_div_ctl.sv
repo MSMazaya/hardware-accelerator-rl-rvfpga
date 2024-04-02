@@ -185,13 +185,60 @@ import el2_pkg::*;
                                             ? (out_q_update_stb)
                                             : (finish_dly_div) ) ) );
 
+   hardware_accelerator hw_accel(
+        .input_reg1 (divisor_fp),
+        .input_reg2 (dividend_fp),
+        .is_store (dp_fp_add_ini),
+        .is_load (dp_fp_div_ini),
+        .is_learn(dp_fp_mul_ini),
+        .is_update(dp_q_update_ini),
+        .clk (clk),
+        .rst (rst_l),
+        .output_store (out_fp_add),
+        .output_load (out_fp_div),
+        .output_learn (out_fp_mul),
+        .output_update (out_q_update),
+        .output_learn_done (out_fp_mul_stb),
+        .output_store_done (out_fp_add_stb),
+        .output_load_done (out_fp_div_stb),
+        .output_update_done (out_q_update_stb)
+   );
 
-  logic ram_read_done;
-  logic ram_write_enable;
-  logic ram_read_enable;
-  logic [31:0]ram_address;
-  logic [31:0]ram_data_in;
-  logic [31:0]ram_data_out;
+endmodule // el2_exu_div_ctl
+
+module hardware_accelerator(
+        input_reg1,
+        input_reg2,
+        is_store,
+        is_load,
+        is_learn,
+        is_update,
+        clk,
+        rst,
+        output_store,
+        output_load,
+        output_learn,
+        output_update,
+        output_learn_done,
+        output_store_done,
+        output_load_done,
+        output_update_done
+      );
+
+  input     [31:0] input_reg1, input_reg2;
+  input     is_store, is_load, is_learn, is_update;
+  input     clk;
+  input     rst;
+
+  output    [31:0] output_store, output_load, output_learn, output_update;
+  output    output_store_done, output_load_done, output_learn_done, output_update_done;
+
+  logic    ram_write_enable;
+  logic    ram_read_enable;
+  logic    [31:0]ram_address;
+  logic    [31:0]ram_data_in;
+  logic    ram_read_done;
+  logic    [31:0]ram_data_out;
 
   ram ram(
       .clk (clk),
@@ -203,72 +250,13 @@ import el2_pkg::*;
       .read_done (ram_read_done)
   );
 
-   hardware_accelerator hw_accel(
-        .input_address (divisor_fp),
-        .input_value (dividend_fp),
-        .is_store (dp_fp_add_ini),
-        .is_load (dp_fp_div_ini),
-        .is_learn(dp_fp_mul_ini),
-        .clk (clk),
-        .rst (rst_l),
-        .output_store (out_fp_add),
-        .output_load (out_fp_div),
-        .output_learn (out_fp_mul),
-        .output_learn_done (out_fp_mul_stb),
-        .output_store_done (out_fp_add_stb),
-        .output_load_done (out_fp_div_stb),
-        .ram_write_enable (ram_write_enable),
-        .ram_read_enable (ram_read_enable),
-        .ram_address (ram_address),
-        .ram_data_in (ram_data_in),
-        .ram_read_done (ram_read_done),
-        .ram_data_out (ram_data_out)
-   );
-
-endmodule // el2_exu_div_ctl
-
-module hardware_accelerator(
-        input_address,
-        input_value,
-        is_store,
-        is_load,
-        is_learn,
-        clk,
-        rst,
-        output_store,
-        output_load,
-        output_learn,
-        output_learn_done,
-        output_store_done,
-        output_load_done,
-        ram_write_enable,
-        ram_read_enable,
-        ram_address,
-        ram_data_in,
-        ram_data_out,
-        ram_read_done
-      );
-
-  input     [31:0] input_address, input_value;
-  input     is_store, is_load, is_learn;
-  input     clk;
-  input     rst;
-
-  output    [31:0] output_store, output_load, output_learn;
-  output    output_store_done, output_load_done, output_learn_done;
-
-  output    ram_write_enable;
-  output    ram_read_enable;
-  output    [31:0]ram_address;
-  output    [31:0]ram_data_in;
-  input     ram_read_done;
-  input     [31:0]ram_data_out;
-
   reg [1:0] lsu_state;
-  parameter get_input_address = 2'd0,
-            get_input_value   = 2'd1,
+  parameter get_input_reg1 = 2'd0,
+            get_input_reg2   = 2'd1,
             store_or_load     = 2'd2,
             write_output      = 2'd3;
+  // TODO:
+  parameter store_mode_q_table  = 2'd0;
 
   reg       learn_state;
   parameter get_max_candidate     = 1'd0,
@@ -284,17 +272,32 @@ module hardware_accelerator(
             action_right    = 1'd3;
   reg       [31:0]max_q;
 
-  reg       [31:0] input_address_reg, input_value_reg;
+  reg       [31:0] input_reg1_reg, input_reg2_reg;
   reg       [31:0] ram_address_reg, ram_data_in_reg;
-  reg       [31:0] output_store_reg, output_load_reg, output_learn_reg;
   reg       ram_write_enable_reg, ram_read_enable_reg;
-  reg       output_store_done_reg, output_load_done_reg, output_learn_done_reg;
+  reg       [31:0] output_store_reg, 
+                   output_load_reg, 
+                   output_learn_reg, 
+                   output_update_reg;
+  reg       output_store_done_reg, 
+            output_load_done_reg, 
+            output_learn_done_reg, 
+            output_update_done_reg;
 
   always @(posedge clk)
   begin
+    // void updateQ(int row, int col, int act) {
+    //   float past = (1 - learnRate) * q_table[row][col][act];
+    //   float future = learnRate * (getReward(row, col, act) +
+    //                               discount * getNextMaxQ(row, col, act));
+    //   q_table[row][col][act] = past + future;
+    // }
+    if(is_update) begin
+    end
+
     if(is_learn) begin
       if(i_action == 0)
-        ram_address_reg <= 0; // change this to input user later
+        ram_address_reg <= input_reg1; // change this to input user later
       if(i_action != 4) begin
           case(learn_state)
               get_max_candidate:
@@ -343,28 +346,28 @@ module hardware_accelerator(
     end
 
     case(lsu_state)
-      // NOTE: somehow get_input_address and get_input_value (putting to registers)
+      // NOTE: somehow get_input_reg1 and get_input_reg2 (putting to registers)
       // make the operation fails? the ack came sometimes after 7 clock, crazy
-      get_input_address:
+      get_input_reg1:
       begin
         if (is_store || is_load) begin
-          input_address_reg <= input_address;
-          lsu_state <= get_input_value;
+          input_reg1_reg <= input_reg1;
+          lsu_state <= get_input_reg2;
         end
       end
 
-      get_input_value:
+      get_input_reg2:
       begin
-        input_value_reg <= input_value;
+        input_reg2_reg <= input_reg2;
         lsu_state <= store_or_load;
       end
 
       store_or_load:
       begin
-        ram_address_reg <= input_address_reg;
+        ram_address_reg <= input_reg1_reg;
         ram_write_enable_reg <= is_store;
         ram_read_enable_reg <= is_load;
-        ram_data_in_reg <= input_value_reg;
+        ram_data_in_reg <= input_reg2_reg;
         lsu_state <= write_output;
       end
 
@@ -376,7 +379,7 @@ module hardware_accelerator(
           if (output_store_done_reg) begin
             output_store_done_reg <= 0;
             ram_write_enable_reg <= 0;
-            lsu_state <= get_input_address;
+            lsu_state <= get_input_reg1;
           end
         end else if(is_load && ram_read_done) begin
           output_load_done_reg <= 1;
@@ -384,107 +387,27 @@ module hardware_accelerator(
           if (output_load_done_reg) begin
             output_load_done_reg <= 0;
             ram_read_enable_reg <= 0;
-            lsu_state <= get_input_address;
+            lsu_state <= get_input_reg1;
           end
         end 
         if (!is_store && !is_load) begin
           output_store_done_reg <= 0;
           output_load_done_reg <= 0;
-          lsu_state <= get_input_address;
+          lsu_state <= get_input_reg1;
         end
       end
     endcase
 
   end
 
+  assign output_update_done = output_update_done_reg;
+  assign output_update = output_update_reg;
   assign output_learn_done = output_learn_done_reg;
   assign output_learn = output_learn_reg;
   assign output_load = output_load_reg;
   assign output_store = output_store_reg;
   assign output_store_done = output_store_done_reg;
   assign output_load_done = output_load_done_reg;
-  assign ram_data_in = ram_data_in_reg;
-  assign ram_address = ram_address_reg;
-  assign ram_write_enable = ram_write_enable_reg;
-  assign ram_read_enable = ram_read_enable_reg;
-endmodule
-
-module q_learn(
-    is_learn,
-    clk,
-    rst,
-    output_max,
-    output_max_done,
-    ram_write_enable,
-    ram_read_enable,
-    ram_address,
-    ram_data_in,
-    ram_data_out,
-    ram_read_done
-  );
-  input     is_learn;
-  input     clk;
-  input     rst;
-
-  output    output_max_done;
-  output    [31:0] output_max;
-
-  output    ram_write_enable;
-  output    ram_read_enable;
-  output    [31:0]ram_address;
-  output    [31:0]ram_data_in;
-  input     ram_read_done;
-  input     [31:0]ram_data_out;
-
-  reg [1:0] state;
-  parameter get_data        = 1'd0,
-            compare_data    = 1'd1;
-
-  reg       [31:0]max_q;
-  reg       [2:0]i_action;
-  reg       [31:0] ram_address_reg, ram_data_in_reg;
-  reg       ram_write_enable_reg, ram_read_enable_reg;
-  reg       output_max_done_reg;
-  reg       [31:0] output_max_reg;
-
-  always @(posedge clk)
-  begin
-    if(is_learn) begin
-      if(i_action != 4) begin
-          case(state)
-              get_data:
-              begin
-                ram_read_enable_reg <= 1;
-                ram_address_reg <= ram_address_reg + 1;
-                state <= compare_data;
-              end
-              compare_data:
-              begin
-                if(ram_read_done) begin
-                  // FIX: https://stackoverflow.com/questions/33678827/compare-floating-point-numbers-as-integers
-                  if(ram_data_out > max_q) begin
-                      max_q <= ram_data_out;
-                  end
-                  state <= get_data;
-                  i_action <= i_action + 1;
-                  ram_read_enable_reg <= 0;
-                end
-              end
-          endcase
-      end else begin
-          output_max_done_reg <= 1;
-          if(output_max_done) begin
-            ram_read_enable_reg <= 0;
-            output_max_done_reg <= 0;
-            output_max_reg <= max_q;
-            i_action <= 0;
-          end
-      end
-    end
-  end
-
-  assign output_max_done = output_max_done_reg;
-  assign output_max = output_max_reg;
   assign ram_data_in = ram_data_in_reg;
   assign ram_address = ram_address_reg;
   assign ram_write_enable = ram_write_enable_reg;
