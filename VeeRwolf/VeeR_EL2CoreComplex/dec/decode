@@ -5,6 +5,7 @@ fadd      =    [0000000..................1010011]
 fmul      =    [0001000..................1010011]
 fdiv      =    [0001100..................1010011]
 qupdate   =    [0001110..................1010011]
+qlsumode  =    [0001111..................1010011]
 
 clz       =  [011000000000.....001.....0010011]
 ctz       =  [011000000001.....001.....0010011]
@@ -340,6 +341,7 @@ rv32i = {
       fp_mul
       fp_div
       q_update
+      q_lsumode
       alu
       rs1
       rs2
@@ -443,6 +445,7 @@ rv32i[fadd]      = { div rs1 rs2 rd        presync postsync  fp_add }
 rv32i[fmul]      = { div rs1 rs2 rd        presync postsync  fp_mul }
 rv32i[fdiv]      = { div rs1 rs2 rd        presync postsync  fp_div }
 rv32i[qupdate]   = { div rs1 rs2 rd        presync postsync  q_update }
+rv32i[qlsumode]  = { div rs1 rs2 rd        presync postsync  q_lsumode }
 
 rv32i[clz]       =  { alu zbb     rs1     rd                       clz   }
 rv32i[ctz]       =  { alu zbb     rs1     rd                       ctz   }
