@@ -241,6 +241,8 @@ module hardware_accelerator(
         output_lsumode_done
       );
 
+  // INPUTS & OUTPUTS
+
   input     [31:0] input_reg1, input_reg2;
   input     is_store, is_load, is_learn, is_update, is_lsumode;
   input     clk;
@@ -251,52 +253,7 @@ module hardware_accelerator(
   output    output_store_done, output_load_done, output_learn_done, 
             output_update_done, output_lsumode_done;
 
-  logic    ram_write_enable;
-  logic    ram_read_enable;
-  logic    [31:0]ram_address;
-  logic    [31:0]ram_data_in;
-  logic    ram_read_done;
-  logic    [31:0]ram_data_out;
-
-  ram ram(
-      .clk (clk),
-      .write_enable (ram_write_enable),
-      .read_enable (ram_read_enable),
-      .address (ram_address),
-      .data_in (ram_data_in),
-      .data_out (ram_data_out),
-      .read_done (ram_read_done)
-  );
-
-  reg [1:0] lsu_state;
-  parameter get_input_reg1 = 2'd0,
-            get_input_reg2   = 2'd1,
-            store_or_load     = 2'd2,
-            write_output      = 2'd3;
-  reg [2:0] lsu_mode;
-  reg lsu_mode_state;
-  parameter lsu_mode_state_operate = 1'd0,
-            lsu_mode_state_delay_done = 1'd1;
-  // TODO:
-  parameter store_mode_q_table  = 2'd0;
-
-  reg       learn_state;
-  parameter get_max_candidate     = 1'd0,
-            compare_max_candidate = 1'd1;
-  reg       [2:0]i_action;
-  // 10 bits -> 1023 max, episode goes up to 1000
-  reg       [6:0]current_episode;
-  parameter max_episode = 10'd1000;
-  reg       [1:0]chosen_action;
-  parameter action_up       = 1'd0,
-            action_down     = 1'd2,
-            action_left     = 1'd3,
-            action_right    = 1'd3;
-  reg       [31:0]max_q;
-
-  reg       [31:0] input_reg1_reg, input_reg2_reg;
-  reg       [31:0] ram_address_reg, ram_data_in_reg;
-  reg       ram_write_enable_reg, ram_read_enable_reg;
+  // MODULE REGS
   reg       [31:0] output_store_reg, 
                    output_load_reg, 
                    output_learn_reg, 
@@ -307,6 +264,124 @@ module hardware_accelerator(
             output_learn_done_reg, 
             output_update_done_reg,
             output_lsumode_done_reg;
+
+  logic    ram_write_enable;
+  logic    ram_read_enable;
+  logic    [31:0]ram_address;
+  logic    [31:0]ram_data_in;
+  logic    ram_read_done;
+  logic    [31:0]ram_data_out;
+
+
+  // INNER MODULES
+  ram ram(
+      .clk (clk),
+      .write_enable (ram_write_enable),
+      .read_enable (ram_read_enable),
+      .address (ram_address),
+      .data_in (ram_data_in),
+      .data_out (ram_data_out),
+      .read_done (ram_read_done)
+  );
+
+  reg[31:0] mul_input_a,
+            mul_input_b,
+            mul_output;
+  reg mul_output_done,
+      mul_is_operating;
+
+  multiplier FloatingPointMultiplier(
+       .input_a(mul_input_a),
+       .input_b(mul_output_a),
+       .input_a_stb(mul_is_operating),
+       .input_b_stb(1'b1),
+       .output_z_ack(1'b1),
+       .clk(clk),
+       .rst(1'b0),
+       .output_z(mul_output),
+       .output_z_stb(mul_output_done),
+       .input_a_ack(),
+       .input_b_ack());
+
+  reg[31:0] adder_input_a,
+            adder_input_b,
+            adder_output;
+  reg adder_output_done,
+      adder_is_operating;
+
+  adder FloatingPointAdder(
+       .input_a(adder_input_a),
+       .input_b(adder_input_b),
+       .input_a_stb(adder_is_operating),
+       .input_b_stb(1'b1),
+       .output_z_ack(1'b1),
+       .clk(clk),
+       .rst(1'b0),
+       .output_z(adder_output),
+       .output_z_stb(adder_output_done),
+       .input_a_ack(),
+       .input_b_ack());
+
+
+  // Q RAM LSU
+  reg [1:0] lsu_state;
+  parameter get_input_reg1 = 2'd0,
+            get_input_reg2   = 2'd1,
+            store_or_load     = 2'd2,
+            write_output      = 2'd3;
+  reg       [31:0] input_reg1_reg, input_reg2_reg;
+  reg       [31:0] ram_address_reg, ram_data_in_reg;
+  reg       ram_write_enable_reg, ram_read_enable_reg;
+
+  // Q LSU MODE
+  reg [2:0] lsu_mode;
+  reg lsu_mode_state;
+  parameter lsu_mode_state_operate = 1'd0,
+            lsu_mode_state_delay_done = 1'd1;
+  parameter lsu_mode_q_table = 2'd0,
+            lsu_mode_q_table_memo = 2'd1,
+            lsu_mode_learning_rate = 2'd2,
+            lsu_mode_discount_factor = 2'd3;
+  reg signed [31:0] learning_rate;
+  reg [31:0] discount_factor;
+
+  // Q UPDATE
+  reg       [3:0] q_update_state;
+  parameter q_update_state_first_stage = 4'd0,
+            q_update_state_second_stage = 4'd1,
+            q_update_state_third_stage = 4'd2,
+            q_update_state_fourth_stage = 4'd3,
+            q_update_state_fifth_stage = 4'd4,
+            q_update_state_final_stage = 4'd5;
+  reg        one_minus_learning_rate_done,
+             current_q_value_done,
+             next_max_q_done,
+             discounted_next_max_q_done;
+  reg [31:0] one_minus_learning_rate,
+             current_q_value,
+             next_max_q,
+             discounted_next_max_q;
+  reg max_is_operating, max_done_operating;
+  reg [31:0] address_from_update,
+             max_output_for_update;
+
+  // Q MAX
+  reg       learn_state;
+  parameter get_max_candidate     = 1'd0,
+            compare_max_candidate = 1'd1;
+  reg       [2:0]i_action;
+  reg       [31:0]max_q;
+  reg       delay_out;
+
+  // TODO: Q LEARN?
+  // reg       [6:0]current_episode;
+  // 10 bits -> 1023 max, episode goes up to 1000
+  // parameter max_episode = 10'd1000;
+  // reg       [1:0]chosen_action;
+  // parameter action_up       = 1'd0,
+  //           action_down     = 1'd2,
+  //           action_left     = 1'd3,
+  //           action_right    = 1'd3;
 
   always @(posedge clk)
   begin
@@ -328,18 +403,96 @@ module hardware_accelerator(
         end
       endcase
     end
+
     // void updateQ(int row, int col, int act) {
     //   float past = (1 - learnRate) * q_table[row][col][act];
     //   float future = learnRate * (getReward(row, col, act) +
     //                               discount * getNextMaxQ(row, col, act));
     //   q_table[row][col][act] = past + future;
     // }
+    // reg1 = address of q_table
+    // reg2 = reward
+    // first stage:
+    // 1. get q_table[row][col][act];
+    // 2. starts computing get max <- seems hard because overlap with (1)
+    // 3. compute (1-learnRate)
+    // 4. MAYBE getting the max?
+    // second stage:
+    // 1. compute (1-learnRate)*q_table[current]
+    // 2. discount * getNextMaxQ(row, col, act)
     if(is_update) begin
+      case(q_update_state)
+        q_update_state_first_stage:
+        begin
+          adder_input_a <= 'h3f800000;
+          adder_input_b <= {~learning_rate[31], learning_rate[30:0]};
+          // one float 32 bit, in hex
+          adder_is_operating <= 1;
+
+          ram_address_reg <= input_reg1;
+          ram_read_enable_reg <= 1;
+          // idk, just in case
+          ram_write_enable_reg <= 0;
+
+          q_update_state <= q_update_state_second_stage;
+        end
+        q_update_state_second_stage:
+        begin
+          if(ram_read_done) begin
+            ram_read_enable_reg <= 0;
+            current_q_value <= ram_data_out;
+            max_is_operating <= 1;
+            // WARN: check if its actually flooring?
+            // + IT STILL IS NOT THE NEXT!
+            address_from_update <= (input_reg1/4)*4;
+            q_update_state <= q_update_state_third_stage;
+          end
+        end
+        q_update_state_third_stage:
+        begin
+          if(max_done_operating) begin
+            mul_input_a <= max_output_for_update;
+            mul_input_b <= discount_factor;
+            mul_is_operating <= 1;
+            q_update_state <= q_update_state_fourth_stage;
+          end
+        end
+        q_update_state_fourth_stage:
+        begin
+          if(adder_output_done) begin
+            adder_is_operating <= 0;
+            one_minus_learning_rate_done <= 1;
+          end
+
+          if(one_minus_learning_rate_done & mul_output_done) begin
+            mul_input_a <= adder_output; // one_minus_learning_rate
+            mul_input_b <= current_q_value;
+            mul_is_operating <= 1;
+
+            adder_input_a <= input_reg2; // reward
+            adder_input_b <= mul_output; // discounted_next_max_q
+            adder_is_operating <= 1;
+
+            q_update_state <= q_update_state_fifth_stage;
+          end
+        end
+        q_update_state_fifth_stage:
+        begin
+        end
+      endcase
     end
 
-    if(is_learn) begin
-      if(i_action == 0)
-        ram_address_reg <= input_reg1; // change this to input user later
+    // TODO: create a delay state after done 
+    // (done takes 1 extra cycle to respond)
+    // so it does not continue to the next state
+    // DONE but yet to be checked
+    if(is_learn | max_is_operating) begin
+      if(i_action == 0) begin
+        if(max_is_operating)
+          ram_address_reg <= address_from_update;
+        else
+          ram_address_reg <= input_reg1; // change this to input user later
+      end
       if(i_action != 4) begin
           case(learn_state)
               get_max_candidate:
@@ -377,11 +530,28 @@ module hardware_accelerator(
               end
           endcase
       end else begin
-          output_learn_done_reg <= 1;
-          output_learn_reg <= max_q;
-          if(output_learn_done) begin
-            ram_read_enable_reg <= 0;
-            output_learn_done_reg <= 0;
+          if(max_is_operating)
+          begin
+            max_done_operating <= 1;
+            max_output_for_update <= max_q;
+            if(max_done_operating) begin
+              max_done_operating <= 0;
+              max_is_operating <= 0;
+              i_action <= 0;
+            end
+          end
+          else
+          begin
+            output_learn_done_reg <= 1;
+            output_learn_reg <= max_q;
+            if(output_learn_done) begin
+              ram_read_enable_reg <= 0;
+              output_learn_done_reg <= 0;
+              delay_out <= 1;
+            end
+          end
+          if(delay_out) begin
+            delay_out <= 0;
             i_action <= 0;
           end
       end
@@ -406,10 +576,19 @@ module hardware_accelerator(
 
       store_or_load:
       begin
-        ram_address_reg <= input_reg1_reg;
-        ram_write_enable_reg <= is_store;
-        ram_read_enable_reg <= is_load;
-        ram_data_in_reg <= input_reg2_reg;
+        case(lsu_mode)
+          lsu_mode_q_table:
+          begin
+            ram_address_reg <= input_reg1_reg;
+            ram_write_enable_reg <= is_store;
+            ram_read_enable_reg <= is_load;
+            ram_data_in_reg <= input_reg2_reg;
+          end
+          lsu_mode_learning_rate:
+            learning_rate <= input_reg2_reg;
+          lsu_mode_discount_factor:
+            discount_factor <= input_reg2_reg;
+        endcase
         lsu_state <= write_output;
       end
 
