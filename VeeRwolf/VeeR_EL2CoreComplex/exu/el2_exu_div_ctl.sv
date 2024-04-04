@@ -292,7 +292,7 @@ module hardware_accelerator(
 
   multiplier FloatingPointMultiplier(
        .input_a(mul_input_a),
-       .input_b(mul_output_a),
+       .input_b(mul_input_b),
        .input_a_stb(mul_is_operating),
        .input_b_stb(1'b1),
        .output_z_ack(1'b1),
@@ -353,14 +353,23 @@ module hardware_accelerator(
             q_update_state_fourth_stage = 4'd3,
             q_update_state_fifth_stage = 4'd4,
             q_update_state_final_stage = 4'd5;
-  reg        one_minus_learning_rate_done,
-             current_q_value_done,
-             next_max_q_done,
-             discounted_next_max_q_done;
+  reg       one_minus_learning_rate_done,
+            current_q_value_done,
+            next_max_q_done,
+            discounted_next_max_q_done,
+            discounted_max_with_reward_done,
+            future_value_done,
+            past_value_done,
+            final_value_done,
+            write_back_done;
   reg [31:0] one_minus_learning_rate,
              current_q_value,
              next_max_q,
-             discounted_next_max_q;
+             discounted_next_max_q,
+             discounted_max_with_reward,
+             future_value,
+             past_value,
+             final_value;
   reg max_is_operating, max_done_operating;
   reg [31:0] address_from_update,
              max_output_for_update;
@@ -421,65 +430,143 @@ module hardware_accelerator(
     // 1. compute (1-learnRate)*q_table[current]
     // 2. discount * getNextMaxQ(row, col, act)
     if(is_update) begin
-      case(q_update_state)
-        q_update_state_first_stage:
-        begin
+      if(~one_minus_learning_rate_done) begin
+        if (~adder_is_operating) begin
           adder_input_a <= 'h3f800000;
           adder_input_b <= {~learning_rate[31], learning_rate[30:0]};
           // one float 32 bit, in hex
           adder_is_operating <= 1;
+        end
 
+        if (adder_output_done) begin
+          one_minus_learning_rate <= adder_output;
+          one_minus_learning_rate_done <= 1;
+          adder_is_operating <= 0;
+        end
+      end
+
+      if(~current_q_value_done) begin
+        // WARN: read_enable_reg???? should made another flag tho
+        if(~ram_read_enable_reg) begin
           ram_address_reg <= input_reg1;
           ram_read_enable_reg <= 1;
           // idk, just in case
           ram_write_enable_reg <= 0;
+        end
 
-          q_update_state <= q_update_state_second_stage;
+        if(ram_read_done) begin
+          current_q_value <= ram_data_out;
+          current_q_value_done <= 1;
+          ram_read_enable_reg <= 0;
         end
-        q_update_state_second_stage:
-        begin
-          if(ram_read_done) begin
-            ram_read_enable_reg <= 0;
-            current_q_value <= ram_data_out;
-            max_is_operating <= 1;
-            // WARN: check if its actually flooring?
-            // + IT STILL IS NOT THE NEXT!
-            address_from_update <= (input_reg1/4)*4;
-            q_update_state <= q_update_state_third_stage;
-          end
+      end
+
+      // waiting for current_q_value because non-blocking
+      // assignment
+      if(~next_max_q_done & current_q_value_done) begin
+        if(~max_is_operating) begin
+          max_is_operating <= 1;
+          // WARN: check if its actually flooring?
+          // + IT STILL IS NOT THE NEXT!
+          address_from_update <= (input_reg1/4)*4;
+          q_update_state <= q_update_state_third_stage;
         end
-        q_update_state_third_stage:
-        begin
-          if(max_done_operating) begin
+
+        if(max_done_operating) begin
+          next_max_q <= max_q;
+          next_max_q_done <= 1;
+          max_is_operating <= 0;
+        end
+      end
+
+      if(~discounted_next_max_q_done & next_max_q_done) begin
+        if(~mul_is_operating) begin
             mul_input_a <= max_output_for_update;
             mul_input_b <= discount_factor;
             mul_is_operating <= 1;
-            q_update_state <= q_update_state_fourth_stage;
-          end
         end
-        q_update_state_fourth_stage:
-        begin
-          if(adder_output_done) begin
-            adder_is_operating <= 0;
-            one_minus_learning_rate_done <= 1;
-          end
 
-          if(one_minus_learning_rate_done & mul_output_done) begin
-            mul_input_a <= adder_output; // one_minus_learning_rate
-            mul_input_b <= current_q_value;
-            mul_is_operating <= 1;
-
-            adder_input_a <= input_reg2; // reward
-            adder_input_b <= mul_output; // discounted_next_max_q
-            adder_is_operating <= 1;
-
-            q_update_state <= q_update_state_fifth_stage;
-          end
+        if(mul_output_done) begin
+          discounted_next_max_q <= mul_output;
+          mul_is_operating <= 0;
+          discounted_next_max_q_done <= 1;
         end
-        q_update_state_fifth_stage:
-        begin
+      end
+
+      if(~discounted_max_with_reward_done & discounted_next_max_q_done) begin
+        if(~adder_is_operating) begin
+          adder_input_a <= input_reg2; // reward
+          adder_input_b <= discounted_next_max_q;
+          adder_is_operating <= 1;
         end
-      endcase
+
+        if(adder_output_done) begin
+          discounted_max_with_reward <= adder_output;
+          adder_is_operating <= 0;
+          discounted_max_with_reward_done <= 1;
+        end
+      end
+
+      if(~future_value_done & discounted_max_with_reward_done) begin
+        if(~mul_is_operating) begin
+          mul_input_a <= learning_rate;
+          mul_input_b <= discounted_max_with_reward;
+          mul_is_operating <= 1;
+        end
+
+        if(mul_output_done) begin
+          future_value <= mul_output;
+          mul_is_operating <= 0;
+          future_value_done <= 1;
+        end
+      end
+
+      if(~past_value_done & current_q_value_done & one_minus_learning_rate_done) begin
+        if(~mul_is_operating) begin
+          mul_input_a <= current_q_value;
+          mul_input_b <= one_minus_learning_rate;
+          mul_is_operating <= 1;
+        end
+
+        if(mul_output_done) begin
+          past_value <= mul_output;
+          mul_is_operating <= 0;
+          past_value_done <= 1;
+        end
+      end
+
+      if(~final_value_done & past_value_done & future_value_done) begin
+        if(~adder_is_operating) begin
+          adder_input_a <= past_value; 
+          adder_input_b <= future_value;
+          adder_is_operating <= 1;
+        end
+
+        if(adder_output_done) begin
+          final_value <= adder_output;
+          adder_is_operating <= 0;
+          final_value_done <= 1;
+        end
+      end
+
+      if(~write_back_done & final_value_done) begin
+        output_update_reg <= final_value;
+        output_update_done_reg <= 1;
+        write_back_done <= 1;
+      end
+
+      if(write_back_done) begin
+        output_update_done_reg <= 0;
+        one_minus_learning_rate_done <= 0;
+        current_q_value_done <= 0;
+        next_max_q_done <= 0;
+        discounted_next_max_q_done <= 0;
+        discounted_max_with_reward_done <= 0;
+        future_value_done <= 0;
+        past_value_done <= 0;
+        final_value_done <= 0;
+        write_back_done <= 0;
+      end
     end
 
     // TODO: create a delay state after done 
