@@ -362,6 +362,15 @@ module hardware_accelerator(
             past_value_done,
             final_value_done,
             write_back_done;
+  reg       one_minus_learning_rate_is_operating,
+            current_q_value_is_operating,
+            next_max_q_is_operating,
+            discounted_next_max_q_is_operating,
+            discounted_max_with_reward_is_operating,
+            future_value_is_operating,
+            past_value_is_operating,
+            final_value_is_operating,
+            write_back_is_operating;
   reg [31:0] one_minus_learning_rate,
              current_q_value,
              next_max_q,
@@ -436,12 +445,14 @@ module hardware_accelerator(
           adder_input_b <= {~learning_rate[31], learning_rate[30:0]};
           // one float 32 bit, in hex
           adder_is_operating <= 1;
+          one_minus_learning_rate_is_operating <= 1;
         end
 
-        if (adder_output_done) begin
+        if (adder_output_done & one_minus_learning_rate_is_operating) begin
           one_minus_learning_rate <= adder_output;
           one_minus_learning_rate_done <= 1;
           adder_is_operating <= 0;
+          one_minus_learning_rate_is_operating <= 0;
         end
       end
 
@@ -452,17 +463,19 @@ module hardware_accelerator(
           ram_read_enable_reg <= 1;
           // idk, just in case
           ram_write_enable_reg <= 0;
+          current_q_value_is_operating <= 1;
         end
 
-        if(ram_read_done) begin
+        if(ram_read_done & current_q_value_is_operating) begin
           current_q_value <= ram_data_out;
           current_q_value_done <= 1;
           ram_read_enable_reg <= 0;
+          current_q_value_is_operating <= 0;
         end
       end
 
       // waiting for current_q_value because non-blocking
-      // assignment
+      // assignment, ram hazard
       if(~next_max_q_done & current_q_value_done) begin
         if(~max_is_operating) begin
           max_is_operating <= 1;
@@ -470,26 +483,30 @@ module hardware_accelerator(
           // + IT STILL IS NOT THE NEXT!
           address_from_update <= (input_reg1/4)*4;
           q_update_state <= q_update_state_third_stage;
+          next_max_q_is_operating <= 1;
         end
 
-        if(max_done_operating) begin
+        if(max_done_operating & next_max_q_is_operating) begin
           next_max_q <= max_q;
           next_max_q_done <= 1;
           max_is_operating <= 0;
+          next_max_q_is_operating <= 0;
         end
       end
 
       if(~discounted_next_max_q_done & next_max_q_done) begin
         if(~mul_is_operating) begin
-            mul_input_a <= max_output_for_update;
+            mul_input_a <= next_max_q;
             mul_input_b <= discount_factor;
             mul_is_operating <= 1;
+            discounted_next_max_q_is_operating <= 1;
         end
 
-        if(mul_output_done) begin
+        if(mul_output_done & discounted_next_max_q_is_operating) begin
           discounted_next_max_q <= mul_output;
           mul_is_operating <= 0;
           discounted_next_max_q_done <= 1;
+          discounted_next_max_q_is_operating <= 0;
         end
       end
 
@@ -498,12 +515,14 @@ module hardware_accelerator(
           adder_input_a <= input_reg2; // reward
           adder_input_b <= discounted_next_max_q;
           adder_is_operating <= 1;
+          discounted_max_with_reward_is_operating <= 1;
         end
 
-        if(adder_output_done) begin
+        if(adder_output_done & discounted_max_with_reward_is_operating) begin
           discounted_max_with_reward <= adder_output;
           adder_is_operating <= 0;
           discounted_max_with_reward_done <= 1;
+          discounted_max_with_reward_is_operating <= 0;
         end
       end
 
@@ -512,12 +531,14 @@ module hardware_accelerator(
           mul_input_a <= learning_rate;
           mul_input_b <= discounted_max_with_reward;
           mul_is_operating <= 1;
+          future_value_is_operating <= 1;
         end
 
-        if(mul_output_done) begin
+        if(mul_output_done & future_value_is_operating) begin
           future_value <= mul_output;
           mul_is_operating <= 0;
           future_value_done <= 1;
+          future_value_is_operating <= 0;
         end
       end
 
@@ -526,12 +547,14 @@ module hardware_accelerator(
           mul_input_a <= current_q_value;
           mul_input_b <= one_minus_learning_rate;
           mul_is_operating <= 1;
+          past_value_is_operating <= 1;
         end
 
-        if(mul_output_done) begin
+        if(mul_output_done & past_value_is_operating) begin
           past_value <= mul_output;
           mul_is_operating <= 0;
           past_value_done <= 1;
+          past_value_is_operating <= 0;
         end
       end
 
@@ -540,12 +563,14 @@ module hardware_accelerator(
           adder_input_a <= past_value; 
           adder_input_b <= future_value;
           adder_is_operating <= 1;
+          final_value_is_operating <= 1;
         end
 
-        if(adder_output_done) begin
+        if(adder_output_done & final_value_is_operating) begin
           final_value <= adder_output;
           adder_is_operating <= 0;
           final_value_done <= 1;
+          final_value_is_operating <= 0;
         end
       end
 
