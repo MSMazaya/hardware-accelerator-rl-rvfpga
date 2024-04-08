@@ -146,11 +146,15 @@ import el2_pkg::*;
    logic [31:0]  out_q_lsumode;
    logic         out_q_lsumode_stb;
    logic         out_q_lsumode_stb_delayed;
+   logic [31:0]  out_q_nextstate;
+   logic         out_q_nextstate_stb;
+   logic         out_q_nextstate_stb_delayed;
    logic         dp_fp_add_ini;
    logic         dp_fp_mul_ini;
    logic         dp_fp_div_ini;
    logic         dp_q_update_ini;
    logic         dp_q_lsumode_ini;
+   logic         dp_q_nextstate_ini;
 
    // FP
    rvdffe #(32) divis_fp          (.*, .en(dp.valid),    .din(divisor[31:0]),  .dout(divisor_fp[31:0]));
@@ -160,11 +164,13 @@ import el2_pkg::*;
    rvdff #(1)   dp_fp_str_div     (.*, .din(out_fp_div_stb),          .dout(out_fp_div_stb_delayed));
    rvdff #(1)   dp_q_str_update   (.*, .din(out_q_update_stb),        .dout(out_q_update_stb_delayed));
    rvdff #(1)   dp_q_str_lsumode   (.*, .din(out_q_lsumode_stb),        .dout(out_q_lsumode_stb_delayed));
+   rvdff #(1)   dp_q_str_nextstate   (.*, .din(out_q_nextstate_stb),        .dout(out_q_nextstate_stb_delayed));
    rvdffe #(32) dp_fp_add         (.*, .en(dp.valid || out_fp_add_stb_delayed),    .din(fp_p.fp_add),          .dout(dp_fp_add_ini));
    rvdffe #(32) dp_fp_mul         (.*, .en(dp.valid || out_fp_mul_stb_delayed),    .din(fp_p.fp_mul),          .dout(dp_fp_mul_ini));
    rvdffe #(32) dp_fp_div         (.*, .en(dp.valid || out_fp_div_stb_delayed),    .din(fp_p.fp_div),          .dout(dp_fp_div_ini));
    rvdffe #(32) dp_q_update       (.*, .en(dp.valid || out_q_update_stb_delayed),  .din(fp_p.q_update),        .dout(dp_q_update_ini));
    rvdffe #(32) dp_q_lsumode       (.*, .en(dp.valid || out_q_lsumode_stb_delayed),  .din(fp_p.q_lsumode),        .dout(dp_q_lsumode_ini));
+   rvdffe #(32) dp_q_nextstate       (.*, .en(dp.valid || out_q_nextstate_stb_delayed),  .din(fp_p.q_nextstate),        .dout(dp_q_nextstate_ini));
 
 
    // assign out[31:0] = {32{finish_dly}} & out_raw[31:0];     // Qualification added to quiet result bus while divide is iterating
@@ -179,7 +185,9 @@ import el2_pkg::*;
                                             ? out_q_update
                                             : (dp_q_lsumode_ini
                                               ? out_q_lsumode
-                                              : ({32{finish_dly}} & out_raw[31:0]) ) ) ) );
+                                              : (dp_q_nextstate_ini
+                                                ? out_q_nextstate
+                                                : ({32{finish_dly}} & out_raw[31:0]) ) ) ) ) );
 
 
    // FP
@@ -193,7 +201,9 @@ import el2_pkg::*;
                                             ? (out_q_update_stb)
                                             : (dp_q_lsumode_ini
                                               ? out_q_lsumode_stb
-                                              : (finish_dly_div) ) ) ) );
+                                              : (dp_q_nextstate_ini
+                                                ? out_q_nextstate_stb
+                                                : (finish_dly_div) ) ) ) ) );
 
    hardware_accelerator hw_accel(
         .input_reg1 (divisor_fp),
@@ -203,6 +213,7 @@ import el2_pkg::*;
         .is_learn(dp_fp_mul_ini),
         .is_update(dp_q_update_ini),
         .is_lsumode(dp_q_lsumode_ini),
+        .is_nextstate(dp_q_nextstate_ini),
         .clk (clk),
         .rst (rst_l),
         .output_store (out_fp_add),
@@ -210,11 +221,13 @@ import el2_pkg::*;
         .output_learn (out_fp_mul),
         .output_update (out_q_update),
         .output_lsumode (out_q_lsumode),
+        .output_nextstate (out_q_nextstate),
         .output_learn_done (out_fp_mul_stb),
         .output_store_done (out_fp_add_stb),
         .output_load_done (out_fp_div_stb),
         .output_update_done (out_q_update_stb),
-        .output_lsumode_done (out_q_lsumode_stb)
+        .output_lsumode_done (out_q_lsumode_stb),
+        .output_nextstate_done (out_q_nextstate_stb)
    );
 
 endmodule // el2_exu_div_ctl
@@ -227,6 +240,7 @@ module hardware_accelerator(
         is_learn,
         is_update,
         is_lsumode,
+        is_nextstate,
         clk,
         rst,
         output_store,
@@ -234,24 +248,26 @@ module hardware_accelerator(
         output_learn,
         output_update,
         output_lsumode,
+        output_nextstate,
         output_learn_done,
         output_store_done,
         output_load_done,
         output_update_done,
-        output_lsumode_done
+        output_lsumode_done,
+        output_nextstate_done
       );
 
   // INPUTS & OUTPUTS
 
   input     [31:0] input_reg1, input_reg2;
-  input     is_store, is_load, is_learn, is_update, is_lsumode;
+  input     is_store, is_load, is_learn, is_update, is_lsumode, is_nextstate;
   input     clk;
   input     rst;
 
   output    [31:0] output_store, output_load, output_learn, 
-                   output_update, output_lsumode;
+                   output_update, output_lsumode, output_nextstate;
   output    output_store_done, output_load_done, output_learn_done, 
-            output_update_done, output_lsumode_done;
+            output_update_done, output_lsumode_done, output_nextstate_done;
 
   // MODULE REGS
   reg       [31:0] output_store_reg, 
@@ -263,7 +279,8 @@ module hardware_accelerator(
             output_load_done_reg, 
             output_learn_done_reg, 
             output_update_done_reg,
-            output_lsumode_done_reg;
+            output_lsumode_done_reg, 
+            output_nextstate_done_reg;
 
   logic    ram_write_enable;
   logic    ram_read_enable;
@@ -322,7 +339,6 @@ module hardware_accelerator(
        .input_a_ack(),
        .input_b_ack());
 
-
   // Q RAM LSU
   reg [1:0] lsu_state;
   parameter get_input_reg1 = 2'd0,
@@ -332,6 +348,12 @@ module hardware_accelerator(
   reg       [31:0] input_reg1_reg, input_reg2_reg;
   reg       [31:0] ram_address_reg, ram_data_in_reg;
   reg       ram_write_enable_reg, ram_read_enable_reg;
+
+  // Q NEXTSTATE
+  reg [31:0] q_nextstate;
+  reg q_nextstate_state;
+  parameter q_nextstate_state_operate = 1'd0,
+            q_nextstate_state_delay_done = 1'd1;
 
   // Q LSU MODE
   reg [2:0] lsu_mode;
@@ -418,6 +440,24 @@ module hardware_accelerator(
         lsu_mode_state_delay_done:
         begin
           lsu_mode_state <= lsu_mode_state_operate;
+        end
+      endcase
+    end
+
+    if(is_nextstate) begin
+      case(q_nextstate_state)
+        q_nextstate_state_operate:
+        begin
+          q_nextstate <= input_reg1;
+          output_nextstate_done_reg <= 1;
+          if (output_nextstate_done) begin 
+            output_nextstate_done_reg <= 0;
+            q_nextstate_state <= q_nextstate_state_delay_done;
+          end
+        end
+        q_nextstate_state_delay_done:
+        begin
+          q_nextstate_state <= q_nextstate_state_operate;
         end
       endcase
     end
@@ -743,6 +783,7 @@ module hardware_accelerator(
   assign output_load_done = output_load_done_reg;
   assign output_update_done = output_update_done_reg;
   assign output_lsumode_done = output_lsumode_done_reg;
+  assign output_nextstate_done = output_nextstate_done_reg;
   assign ram_data_in = ram_data_in_reg;
   assign ram_address = ram_address_reg;
   assign ram_write_enable = ram_write_enable_reg;
