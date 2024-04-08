@@ -345,13 +345,6 @@ module hardware_accelerator(
   reg [31:0] q_next_state;
 
   // Q UPDATE
-  reg       [3:0] q_update_state;
-  parameter q_update_state_first_stage = 4'd0,
-            q_update_state_second_stage = 4'd1,
-            q_update_state_third_stage = 4'd2,
-            q_update_state_fourth_stage = 4'd3,
-            q_update_state_fifth_stage = 4'd4,
-            q_update_state_final_stage = 4'd5;
   reg       one_minus_learning_rate_done,
             current_q_value_done,
             next_max_q_done,
@@ -488,7 +481,6 @@ module hardware_accelerator(
           max_is_operating <= 1;
           // WARN: check if its actually flooring?
           address_from_update <= (q_next_state/4)*4;
-          q_update_state <= q_update_state_third_stage;
           next_max_q_is_operating <= 1;
         end
 
