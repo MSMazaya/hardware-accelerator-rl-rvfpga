@@ -202,19 +202,19 @@ import el2_pkg::*;
         .is_load (dp_fp_div_ini),
         .is_learn(dp_fp_mul_ini),
         .is_update(dp_q_update_ini),
-        .is_lsumode(dp_q_lsumode_ini),
+        .is_constant_update(dp_q_lsumode_ini),
         .clk (clk),
         .rst (rst_l),
         .output_store (out_fp_add),
         .output_load (out_fp_div),
         .output_learn (out_fp_mul),
         .output_update (out_q_update),
-        .output_lsumode (out_q_lsumode),
+        .output_constant_update (out_q_lsumode),
         .output_learn_done (out_fp_mul_stb),
         .output_store_done (out_fp_add_stb),
         .output_load_done (out_fp_div_stb),
         .output_update_done (out_q_update_stb),
-        .output_lsumode_done (out_q_lsumode_stb)
+        .output_constant_update_done (out_q_lsumode_stb)
    );
 
 endmodule // el2_exu_div_ctl
@@ -226,44 +226,44 @@ module hardware_accelerator(
         is_load,
         is_learn,
         is_update,
-        is_lsumode,
+        is_constant_update,
         clk,
         rst,
         output_store,
         output_load,
         output_learn,
         output_update,
-        output_lsumode,
+        output_constant_update,
         output_learn_done,
         output_store_done,
         output_load_done,
         output_update_done,
-        output_lsumode_done
+        output_constant_update_done
       );
 
   // INPUTS & OUTPUTS
 
   input     [31:0] input_reg1, input_reg2;
-  input     is_store, is_load, is_learn, is_update, is_lsumode;
+  input     is_store, is_load, is_learn, is_update, is_constant_update;
   input     clk;
   input     rst;
 
   output    [31:0] output_store, output_load, output_learn, 
-                   output_update, output_lsumode;
+                   output_update, output_constant_update;
   output    output_store_done, output_load_done, output_learn_done, 
-            output_update_done, output_lsumode_done;
+            output_update_done, output_constant_update_done;
 
   // MODULE REGS
   reg       [31:0] output_store_reg, 
                    output_load_reg, 
                    output_learn_reg, 
                    output_update_reg,
-                   output_lsumode_reg;
+                   output_constant_update_reg;
   reg       output_store_done_reg, 
             output_load_done_reg, 
             output_learn_done_reg, 
             output_update_done_reg,
-            output_lsumode_done_reg;
+            output_constant_update_done_reg;
 
   logic    ram_write_enable;
   logic    ram_read_enable;
@@ -334,16 +334,15 @@ module hardware_accelerator(
   reg       ram_write_enable_reg, ram_read_enable_reg;
 
   // Q LSU MODE
-  reg [2:0] lsu_mode;
-  reg lsu_mode_state;
-  parameter lsu_mode_state_operate = 1'd0,
-            lsu_mode_state_delay_done = 1'd1;
-  parameter lsu_mode_q_table = 2'd0,
-            lsu_mode_q_table_memo = 2'd1,
-            lsu_mode_learning_rate = 2'd2,
-            lsu_mode_discount_factor = 2'd3;
+  reg constant_update_state;
+  parameter constant_update_state_operate = 1'd0,
+            constant_update_state_delay_done = 1'd1;
+  parameter constant_update_learning_rate = 2'd0,
+            constant_update_discount_factor = 2'd1,
+            constant_update_next_state = 2'd2;
   reg signed [31:0] learning_rate;
   reg [31:0] discount_factor;
+  reg [31:0] q_next_state;
 
   // Q UPDATE
   reg       [3:0] q_update_state;
@@ -403,21 +402,29 @@ module hardware_accelerator(
 
   always @(posedge clk)
   begin
-    // NOTE: for now lsu mode does not give any output
-    if(is_lsumode) begin
-      case(lsu_mode_state)
-        lsu_mode_state_operate:
+    // NOTE: for now this does not give any output
+    if(is_constant_update) begin
+      case(constant_update_state)
+        constant_update_state_operate:
         begin
-          lsu_mode <= input_reg1;
-          output_lsumode_done_reg <= 1;
-          if (output_lsumode_done) begin 
-            output_lsumode_done_reg <= 0;
-            lsu_mode_state <= lsu_mode_state_delay_done;
+          //constant_update <= input_reg1;
+          case(input_reg1)
+            constant_update_learning_rate:
+              learning_rate <= input_reg2;
+            constant_update_discount_factor:
+              discount_factor <= input_reg2;
+            constant_update_next_state:
+              q_next_state <= input_reg2;
+          endcase
+          output_constant_update_done_reg <= 1;
+          if (output_constant_update_done) begin 
+            output_constant_update_done_reg <= 0;
+            constant_update_state <= constant_update_state_delay_done;
           end
         end
-        lsu_mode_state_delay_done:
+        constant_update_state_delay_done:
         begin
-          lsu_mode_state <= lsu_mode_state_operate;
+          constant_update_state <= constant_update_state_operate;
         end
       endcase
     end
@@ -480,8 +487,7 @@ module hardware_accelerator(
         if(~max_is_operating) begin
           max_is_operating <= 1;
           // WARN: check if its actually flooring?
-          // + IT STILL IS NOT THE NEXT!
-          address_from_update <= (input_reg1/4)*4;
+          address_from_update <= (q_next_state/4)*4;
           q_update_state <= q_update_state_third_stage;
           next_max_q_is_operating <= 1;
         end
@@ -688,19 +694,10 @@ module hardware_accelerator(
 
       store_or_load:
       begin
-        case(lsu_mode)
-          lsu_mode_q_table:
-          begin
-            ram_address_reg <= input_reg1_reg;
-            ram_write_enable_reg <= is_store;
-            ram_read_enable_reg <= is_load;
-            ram_data_in_reg <= input_reg2_reg;
-          end
-          lsu_mode_learning_rate:
-            learning_rate <= input_reg2_reg;
-          lsu_mode_discount_factor:
-            discount_factor <= input_reg2_reg;
-        endcase
+        ram_address_reg <= input_reg1_reg;
+        ram_write_enable_reg <= is_store;
+        ram_read_enable_reg <= is_load;
+        ram_data_in_reg <= input_reg2_reg;
         lsu_state <= write_output;
       end
 
@@ -734,7 +731,7 @@ module hardware_accelerator(
   end
 
   assign output_update = output_update_reg;
-  assign output_lsumode = output_lsumode_reg;
+  assign output_constant_update = output_constant_update_reg;
   assign output_learn_done = output_learn_done_reg;
   assign output_learn = output_learn_reg;
   assign output_load = output_load_reg;
@@ -742,7 +739,7 @@ module hardware_accelerator(
   assign output_store_done = output_store_done_reg;
   assign output_load_done = output_load_done_reg;
   assign output_update_done = output_update_done_reg;
-  assign output_lsumode_done = output_lsumode_done_reg;
+  assign output_constant_update_done = output_constant_update_done_reg;
   assign ram_data_in = ram_data_in_reg;
   assign ram_address = ram_address_reg;
   assign ram_write_enable = ram_write_enable_reg;
