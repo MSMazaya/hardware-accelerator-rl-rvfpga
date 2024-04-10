@@ -354,6 +354,7 @@ module hardware_accelerator(
             past_value_done,
             final_value_done,
             write_back_done;
+  reg       write_back_delay;
   reg       one_minus_learning_rate_is_operating,
             current_q_value_is_operating,
             next_max_q_is_operating,
@@ -379,6 +380,7 @@ module hardware_accelerator(
   reg       learn_state;
   parameter get_max_candidate     = 1'd0,
             compare_max_candidate = 1'd1;
+  reg       not_first_time_read_max;
   reg       [2:0]i_action;
   reg       [31:0]max_q;
   reg       delay_out;
@@ -439,6 +441,7 @@ module hardware_accelerator(
     // 1. compute (1-learnRate)*q_table[current]
     // 2. discount * getNextMaxQ(row, col, act)
     if(is_update) begin
+      // Adder: first
       if(~one_minus_learning_rate_done) begin
         if (~adder_is_operating) begin
           adder_input_a <= 'h3f800000;
@@ -456,6 +459,7 @@ module hardware_accelerator(
         end
       end
 
+      // RAM: first
       if(~current_q_value_done) begin
         // WARN: read_enable_reg???? should made another flag tho
         if(~ram_read_enable_reg) begin
@@ -474,6 +478,7 @@ module hardware_accelerator(
         end
       end
 
+      // RAM: second, after current_q_value_done
       // waiting for current_q_value because non-blocking
       // assignment, ram hazard
       if(~next_max_q_done & current_q_value_done) begin
@@ -492,6 +497,7 @@ module hardware_accelerator(
         end
       end
 
+      // Mul: first, but wait before next_max_q_done
       if(~discounted_next_max_q_done & next_max_q_done) begin
         if(~mul_is_operating) begin
             mul_input_a <= next_max_q;
@@ -508,7 +514,8 @@ module hardware_accelerator(
         end
       end
 
-      if(~discounted_max_with_reward_done & discounted_next_max_q_done) begin
+      // Adder: second, wait before one_minus_learning_rate_done
+      if(~discounted_max_with_reward_done & discounted_next_max_q_done & one_minus_learning_rate_done) begin
         if(~adder_is_operating) begin
           adder_input_a <= input_reg2; // reward
           adder_input_b <= discounted_next_max_q;
@@ -524,23 +531,8 @@ module hardware_accelerator(
         end
       end
 
-      if(~future_value_done & discounted_max_with_reward_done) begin
-        if(~mul_is_operating) begin
-          mul_input_a <= learning_rate;
-          mul_input_b <= discounted_max_with_reward;
-          mul_is_operating <= 1;
-          future_value_is_operating <= 1;
-        end
-
-        if(mul_output_done & future_value_is_operating) begin
-          future_value <= mul_output;
-          mul_is_operating <= 0;
-          future_value_done <= 1;
-          future_value_is_operating <= 0;
-        end
-      end
-
-      if(~past_value_done & current_q_value_done & one_minus_learning_rate_done) begin
+      // Mul: second, wait before discounted_next_max_q_done
+      if(~past_value_done & current_q_value_done & one_minus_learning_rate_done & discounted_next_max_q_done) begin
         if(~mul_is_operating) begin
           mul_input_a <= current_q_value;
           mul_input_b <= one_minus_learning_rate;
@@ -556,7 +548,26 @@ module hardware_accelerator(
         end
       end
 
-      if(~final_value_done & past_value_done & future_value_done) begin
+      // Mul: third, wait before past_value_done
+      if(~future_value_done & discounted_max_with_reward_done & past_value_done) begin
+        if(~mul_is_operating) begin
+          mul_input_a <= learning_rate;
+          mul_input_b <= discounted_max_with_reward;
+          mul_is_operating <= 1;
+          future_value_is_operating <= 1;
+        end
+
+        if(mul_output_done & future_value_is_operating) begin
+          future_value <= mul_output;
+          mul_is_operating <= 0;
+          future_value_done <= 1;
+          future_value_is_operating <= 0;
+        end
+      end
+
+
+      // Adder: third, wait before discounted_max_with_reward_done 
+      if(~final_value_done & past_value_done & future_value_done & discounted_max_with_reward_done) begin
         if(~adder_is_operating) begin
           adder_input_a <= past_value; 
           adder_input_b <= future_value;
@@ -573,22 +584,37 @@ module hardware_accelerator(
       end
 
       if(~write_back_done & final_value_done) begin
-        output_update_reg <= final_value;
-        output_update_done_reg <= 1;
-        write_back_done <= 1;
+        // Write to register
+        if(~ram_write_enable_reg) begin
+          ram_address_reg <= input_reg1;
+          ram_write_enable_reg <= 1;
+          // idk just in case
+          ram_data_in_reg <= final_value;
+          ram_read_enable_reg <= 0;
+        end else begin
+          // Write to output
+          ram_write_enable_reg <= 0;
+          output_update_reg <= final_value;
+          output_update_done_reg <= 1;
+          write_back_done <= 1;
+        end
       end
 
       if(write_back_done) begin
-        output_update_done_reg <= 0;
-        one_minus_learning_rate_done <= 0;
-        current_q_value_done <= 0;
-        next_max_q_done <= 0;
-        discounted_next_max_q_done <= 0;
-        discounted_max_with_reward_done <= 0;
-        future_value_done <= 0;
-        past_value_done <= 0;
-        final_value_done <= 0;
-        write_back_done <= 0;
+        if(~write_back_delay)
+          write_back_delay <= 1;
+        else begin
+          output_update_done_reg <= 0;
+          one_minus_learning_rate_done <= 0;
+          current_q_value_done <= 0;
+          next_max_q_done <= 0;
+          discounted_next_max_q_done <= 0;
+          discounted_max_with_reward_done <= 0;
+          future_value_done <= 0;
+          past_value_done <= 0;
+          final_value_done <= 0;
+          write_back_done <= 0;
+        end
       end
     end
 
@@ -598,6 +624,7 @@ module hardware_accelerator(
     // DONE but yet to be checked
     if(is_learn | max_is_operating) begin
       if(i_action == 0) begin
+        // max_is_operating is from is_update
         if(max_is_operating)
           ram_address_reg <= address_from_update;
         else
@@ -613,35 +640,39 @@ module hardware_accelerator(
               compare_max_candidate:
               begin
                 if(ram_read_done) begin
-                  /* Identical to floating-point comparison when:
-                    - Both numbers are positive, positive-zero, or positive-infinity.
-                    - One positive and one negative number, and you are using a signed integer comparison.
-                    Inverse of floating-point comparison when:
-                    - Both numbers are negative, negative-zero, or negative-infinity.
-                  */
-                  // both positive (S = 0)
-                  if(!ram_data_out[31] & !max_q[31]) begin
-                    if(ram_data_out[30:0] > max_q[30:0])
-                      max_q <= ram_data_out;
-                  // one negative and one positive
-                  end else if(ram_data_out[31] ^ max_q[31]) begin
-                    if(max_q[31])
-                      max_q <= ram_data_out;
-                  // both negative
-                  end else if(ram_data_out[31] & max_q[31]) begin
-                    if(ram_data_out[30:0] < max_q[30:0])
-                      max_q <= ram_data_out;
+                  if(~not_first_time_read_max) begin
+                    max_q <= ram_data_out;
+                    not_first_time_read_max <= 1;
+                  end else begin
+                    /* Identical to floating-point comparison when:
+                      - Both numbers are positive, positive-zero, or positive-infinity.
+                      - One positive and one negative number, and you are using a signed integer comparison.
+                      Inverse of floating-point comparison when:
+                      - Both numbers are negative, negative-zero, or negative-infinity.
+                    */
+                    // both positive (S = 0)
+                    if(!ram_data_out[31] & !max_q[31]) begin
+                      if(ram_data_out[30:0] > max_q[30:0])
+                        max_q <= ram_data_out;
+                    // one negative and one positive
+                    end else if(ram_data_out[31] ^ max_q[31]) begin
+                      if(max_q[31])
+                        max_q <= ram_data_out;
+                    // both negative
+                    end else if(ram_data_out[31] & max_q[31]) begin
+                      if(ram_data_out[30:0] < max_q[30:0])
+                        max_q <= ram_data_out;
+                    end
+                    learn_state <= get_max_candidate;
+                    i_action <= i_action + 1;
+                    ram_read_enable_reg <= 0;
+                    ram_address_reg <= ram_address_reg + 1;
                   end
-                  learn_state <= get_max_candidate;
-                  i_action <= i_action + 1;
-                  ram_read_enable_reg <= 0;
-                  ram_address_reg <= ram_address_reg + 1;
                 end
               end
           endcase
       end else begin
-          if(max_is_operating)
-          begin
+          if(max_is_operating) begin
             max_done_operating <= 1;
             max_output_for_update <= max_q;
             if(max_done_operating) begin
@@ -664,6 +695,7 @@ module hardware_accelerator(
             delay_out <= 0;
             i_action <= 0;
           end
+          not_first_time_read_max <= 0;
       end
     end
 
