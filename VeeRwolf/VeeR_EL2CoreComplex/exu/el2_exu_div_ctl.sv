@@ -325,11 +325,9 @@ module hardware_accelerator(
 
   // Q RAM LSU
   reg [1:0] lsu_state;
-  parameter get_input_reg1 = 2'd0,
-            get_input_reg2   = 2'd1,
-            store_or_load     = 2'd2,
-            write_output      = 2'd3;
-  reg       [31:0] input_reg1_reg, input_reg2_reg;
+  parameter store_or_load     = 2'd0,
+            write_output      = 2'd1,
+            lsu_delay         = 2'd2;
   reg       [31:0] ram_address_reg, ram_data_in_reg;
   reg       ram_write_enable_reg, ram_read_enable_reg;
 
@@ -384,6 +382,7 @@ module hardware_accelerator(
   reg       [2:0]i_action;
   reg       [31:0]max_q;
   reg       delay_out;
+  reg       seeking_max;
 
   // TODO: Q LEARN?
   // reg       [6:0]current_episode;
@@ -462,7 +461,7 @@ module hardware_accelerator(
       // RAM: first
       if(~current_q_value_done) begin
         // WARN: read_enable_reg???? should made another flag tho
-        if(~ram_read_enable_reg) begin
+        if(~ram_read_enable) begin
           ram_address_reg <= input_reg1;
           ram_read_enable_reg <= 1;
           // idk, just in case
@@ -614,6 +613,7 @@ module hardware_accelerator(
           past_value_done <= 0;
           final_value_done <= 0;
           write_back_done <= 0;
+          write_back_delay <= 0;
         end
       end
     end
@@ -622,107 +622,100 @@ module hardware_accelerator(
     // (done takes 1 extra cycle to respond)
     // so it does not continue to the next state
     // DONE but yet to be checked
-    if(is_learn | max_is_operating) begin
-      if(i_action == 0) begin
-        // max_is_operating is from is_update
-        if(max_is_operating)
-          ram_address_reg <= address_from_update;
-        else
-          ram_address_reg <= input_reg1; // change this to input user later
+    if(i_action == 0) begin
+      // max_is_operating is from is_update
+      if(max_is_operating) begin
+        ram_address_reg <= address_from_update;
+        seeking_max <= 1;
       end
+      if(is_learn) begin
+        ram_address_reg <= input_reg1; // change this to input user later
+        seeking_max <= 1;
+      end
+    end 
+    if(seeking_max) begin
       if(i_action != 4) begin
-          case(learn_state)
-              get_max_candidate:
-              begin
-                ram_read_enable_reg <= 1;
-                learn_state <= compare_max_candidate;
-              end
-              compare_max_candidate:
-              begin
-                if(ram_read_done) begin
-                  if(~not_first_time_read_max) begin
-                    max_q <= ram_data_out;
-                    not_first_time_read_max <= 1;
-                  end else begin
-                    /* Identical to floating-point comparison when:
-                      - Both numbers are positive, positive-zero, or positive-infinity.
-                      - One positive and one negative number, and you are using a signed integer comparison.
-                      Inverse of floating-point comparison when:
-                      - Both numbers are negative, negative-zero, or negative-infinity.
-                    */
-                    // both positive (S = 0)
-                    if(!ram_data_out[31] & !max_q[31]) begin
-                      if(ram_data_out[30:0] > max_q[30:0])
-                        max_q <= ram_data_out;
-                    // one negative and one positive
-                    end else if(ram_data_out[31] ^ max_q[31]) begin
-                      if(max_q[31])
-                        max_q <= ram_data_out;
-                    // both negative
-                    end else if(ram_data_out[31] & max_q[31]) begin
-                      if(ram_data_out[30:0] < max_q[30:0])
-                        max_q <= ram_data_out;
-                    end
-                    learn_state <= get_max_candidate;
-                    i_action <= i_action + 1;
-                    ram_read_enable_reg <= 0;
-                    ram_address_reg <= ram_address_reg + 1;
-                  end
-                end
-              end
-          endcase
-      end else begin
-          if(max_is_operating) begin
-            max_done_operating <= 1;
-            max_output_for_update <= max_q;
-            if(max_done_operating) begin
-              max_done_operating <= 0;
-              max_is_operating <= 0;
-              i_action <= 0;
-            end
-          end
-          else
+        case(learn_state)
+          get_max_candidate:
           begin
-            output_learn_done_reg <= 1;
-            output_learn_reg <= max_q;
-            if(output_learn_done) begin
-              ram_read_enable_reg <= 0;
-              output_learn_done_reg <= 0;
-              delay_out <= 1;
+            ram_read_enable_reg <= 1;
+            learn_state <= compare_max_candidate;
+          end
+          compare_max_candidate:
+          begin
+            if(ram_read_done) begin
+              if(~not_first_time_read_max) begin
+                max_q <= ram_data_out;
+                not_first_time_read_max <= 1;
+              end else begin
+                /* Identical to floating-point comparison when:
+                  - Both numbers are positive, positive-zero, or positive-infinity.
+                  - One positive and one negative number, and you are using a signed integer comparison.
+                  Inverse of floating-point comparison when:
+                  - Both numbers are negative, negative-zero, or negative-infinity.
+                */
+                // both positive (S = 0)
+                if(!ram_data_out[31] & !max_q[31]) begin
+                  if(ram_data_out[30:0] > max_q[30:0])
+                    max_q <= ram_data_out;
+                // one negative and one positive
+                end else if(ram_data_out[31] ^ max_q[31]) begin
+                  if(max_q[31])
+                    max_q <= ram_data_out;
+                // both negative
+                end else if(ram_data_out[31] & max_q[31]) begin
+                  if(ram_data_out[30:0] < max_q[30:0])
+                    max_q <= ram_data_out;
+                end
+                learn_state <= get_max_candidate;
+                i_action <= i_action + 1;
+                ram_read_enable_reg <= 0;
+                ram_address_reg <= ram_address_reg + 1;
+              end
             end
           end
-          if(delay_out) begin
-            delay_out <= 0;
+        endcase
+      end else begin
+        if(max_is_operating) begin
+          max_done_operating <= 1;
+          max_output_for_update <= max_q;
+          if(max_done_operating) begin
+            max_done_operating <= 0;
+            max_is_operating <= 0;
             i_action <= 0;
           end
-          not_first_time_read_max <= 0;
+        end
+        else
+        begin
+          output_learn_done_reg <= 1;
+          output_learn_reg <= max_q;
+          if(output_learn_done) begin
+            ram_read_enable_reg <= 0;
+            output_learn_done_reg <= 0;
+            delay_out <= 1;
+          end
+        end
+        if(delay_out) begin
+          delay_out <= 0;
+          seeking_max <= 0;
+          i_action <= 0;
+        end
+        not_first_time_read_max <= 0;
       end
     end
 
     case(lsu_state)
       // NOTE: somehow get_input_reg1 and get_input_reg2 (putting to registers)
       // make the operation fails? the ack came sometimes after 7 clock, crazy
-      get_input_reg1:
-      begin
-        if (is_store || is_load) begin
-          input_reg1_reg <= input_reg1;
-          lsu_state <= get_input_reg2;
-        end
-      end
-
-      get_input_reg2:
-      begin
-        input_reg2_reg <= input_reg2;
-        lsu_state <= store_or_load;
-      end
-
       store_or_load:
       begin
-        ram_address_reg <= input_reg1_reg;
-        ram_write_enable_reg <= is_store;
-        ram_read_enable_reg <= is_load;
-        ram_data_in_reg <= input_reg2_reg;
-        lsu_state <= write_output;
+        if(is_store || is_load) begin
+          ram_address_reg <= input_reg1;
+          ram_write_enable_reg <= is_store;
+          ram_read_enable_reg <= is_load;
+          ram_data_in_reg <= input_reg2;
+          lsu_state <= write_output;
+        end
       end
 
       write_output:
@@ -733,7 +726,7 @@ module hardware_accelerator(
           if (output_store_done_reg) begin
             output_store_done_reg <= 0;
             ram_write_enable_reg <= 0;
-            lsu_state <= get_input_reg1;
+            lsu_state <= lsu_delay;
           end
         end else if(is_load && ram_read_done) begin
           output_load_done_reg <= 1;
@@ -741,14 +734,19 @@ module hardware_accelerator(
           if (output_load_done_reg) begin
             output_load_done_reg <= 0;
             ram_read_enable_reg <= 0;
-            lsu_state <= get_input_reg1;
+            lsu_state <= lsu_delay;
           end
         end 
         if (!is_store && !is_load) begin
           output_store_done_reg <= 0;
           output_load_done_reg <= 0;
-          lsu_state <= get_input_reg1;
+          lsu_state <= lsu_delay;
         end
+      end
+
+      lsu_delay:
+      begin
+        lsu_state <= store_or_load;
       end
     endcase
 
