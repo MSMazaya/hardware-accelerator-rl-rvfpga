@@ -322,7 +322,6 @@ module hardware_accelerator(
        .input_a_ack(),
        .input_b_ack());
 
-
   // Q RAM LSU
   reg [1:0] lsu_state;
   parameter store_or_load     = 2'd0,
@@ -339,8 +338,10 @@ module hardware_accelerator(
             constant_update_discount_factor = 2'd1,
             constant_update_next_state = 2'd2;
   reg signed [31:0] learning_rate;
+  reg learning_rate_stored;
   reg [31:0] discount_factor;
   reg [31:0] q_next_state;
+  reg q_next_state_stored;
 
   // Q UPDATE
   reg       one_minus_learning_rate_done,
@@ -405,11 +406,19 @@ module hardware_accelerator(
           //constant_update <= input_reg1;
           case(input_reg1)
             constant_update_learning_rate:
+            begin
               learning_rate <= input_reg2;
+              learning_rate_stored <= 1;
+              one_minus_learning_rate_done <= 0;
+            end
             constant_update_discount_factor:
               discount_factor <= input_reg2;
             constant_update_next_state:
+            begin
               q_next_state <= input_reg2;
+              q_next_state_stored <= 1;
+              next_max_q_done <= 0;
+            end
           endcase
           output_constant_update_done_reg <= 1;
           if (output_constant_update_done) begin 
@@ -440,27 +449,48 @@ module hardware_accelerator(
     // second stage:
     // 1. compute (1-learnRate)*q_table[current]
     // 2. discount * getNextMaxQ(row, col, act)
-    if(is_update) begin
-      // Adder: first
-      if(~one_minus_learning_rate_done) begin
-        if (~adder_is_operating) begin
-          adder_input_a <= 'h3f800000;
-          adder_input_b <= {~learning_rate[31], learning_rate[30:0]};
-          // one float 32 bit, in hex
-          adder_is_operating <= 1;
-          one_minus_learning_rate_is_operating <= 1;
-        end
 
-        if (adder_output_done & one_minus_learning_rate_is_operating) begin
-          one_minus_learning_rate <= adder_output;
-          one_minus_learning_rate_done <= 1;
-          adder_is_operating <= 0;
-          one_minus_learning_rate_is_operating <= 0;
-        end
+    // Adder: first
+    if(~one_minus_learning_rate_done && learning_rate_stored) begin
+      if (~adder_is_operating) begin
+        // one float 32 bit, in hex
+        adder_input_a <= 'h3f800000;
+        adder_input_b <= {~learning_rate[31], learning_rate[30:0]};
+        adder_is_operating <= 1;
+        one_minus_learning_rate_is_operating <= 1;
       end
 
-      // RAM: first
-      if(~current_q_value_done) begin
+      if (adder_output_done & one_minus_learning_rate_is_operating) begin
+        one_minus_learning_rate <= adder_output;
+        one_minus_learning_rate_done <= 1;
+        adder_is_operating <= 0;
+        one_minus_learning_rate_is_operating <= 0;
+      end
+    end
+
+
+    // RAM: first
+    if(~next_max_q_done && q_next_state_stored) begin
+      if(~max_is_operating && ~is_learn) begin
+        max_is_operating <= 1;
+        // WARN: check if its actually flooring?
+        address_from_update <= (q_next_state/4)*4;
+        next_max_q_is_operating <= 1;
+      end
+
+      if(max_done_operating & next_max_q_is_operating) begin
+        next_max_q <= max_q;
+        next_max_q_done <= 1;
+        max_is_operating <= 0;
+        next_max_q_is_operating <= 0;
+      end
+    end
+
+    if(is_update) begin
+      // RAM: second, after next_max_q_done
+      // waiting for next_max_q because non-blocking
+      // assignment, ram hazard
+      if(~current_q_value_done && next_max_q_done) begin
         // WARN: read_enable_reg???? should made another flag tho
         if(~ram_read_enable) begin
           ram_address_reg <= input_reg1;
@@ -475,25 +505,6 @@ module hardware_accelerator(
           current_q_value_done <= 1;
           ram_read_enable_reg <= 0;
           current_q_value_is_operating <= 0;
-        end
-      end
-
-      // RAM: second, after current_q_value_done
-      // waiting for current_q_value because non-blocking
-      // assignment, ram hazard
-      if(~next_max_q_done & current_q_value_done) begin
-        if(~max_is_operating) begin
-          max_is_operating <= 1;
-          // WARN: check if its actually flooring?
-          address_from_update <= (q_next_state/4)*4;
-          next_max_q_is_operating <= 1;
-        end
-
-        if(max_done_operating & next_max_q_is_operating) begin
-          next_max_q <= max_q;
-          next_max_q_done <= 1;
-          max_is_operating <= 0;
-          next_max_q_is_operating <= 0;
         end
       end
 
@@ -605,9 +616,7 @@ module hardware_accelerator(
           write_back_delay <= 1;
         else begin
           output_update_done_reg <= 0;
-          one_minus_learning_rate_done <= 0;
           current_q_value_done <= 0;
-          next_max_q_done <= 0;
           discounted_next_max_q_done <= 0;
           discounted_max_with_reward_done <= 0;
           future_value_done <= 0;
