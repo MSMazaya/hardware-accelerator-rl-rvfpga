@@ -381,6 +381,7 @@ module hardware_accelerator(
   reg       not_first_time_read_max;
   reg       [2:0]i_action;
   reg       [31:0]max_q;
+  reg       [31:0]max_q_index;
   reg       delay_out;
   reg       seeking_max;
 
@@ -629,6 +630,9 @@ module hardware_accelerator(
         seeking_max <= 1;
       end
       if(is_learn) begin
+        // ALWAYS STARTS AT THE BASE
+        // if not, use the following
+        // ram_address_reg <= (input_reg1/4)*4; 
         ram_address_reg <= input_reg1; // change this to input user later
         seeking_max <= 1;
       end
@@ -646,6 +650,7 @@ module hardware_accelerator(
             if(ram_read_done) begin
               if(~not_first_time_read_max) begin
                 max_q <= ram_data_out;
+                max_q_index <= ram_address;
                 not_first_time_read_max <= 1;
               end else begin
                 /* Identical to floating-point comparison when:
@@ -656,16 +661,22 @@ module hardware_accelerator(
                 */
                 // both positive (S = 0)
                 if(!ram_data_out[31] & !max_q[31]) begin
-                  if(ram_data_out[30:0] > max_q[30:0])
+                  if(ram_data_out[30:0] > max_q[30:0]) begin
                     max_q <= ram_data_out;
+                    max_q_index <= ram_address;
+                  end
                 // one negative and one positive
                 end else if(ram_data_out[31] ^ max_q[31]) begin
-                  if(max_q[31])
+                  if(max_q[31]) begin
                     max_q <= ram_data_out;
+                    max_q_index <= ram_address;
+                  end
                 // both negative
                 end else if(ram_data_out[31] & max_q[31]) begin
-                  if(ram_data_out[30:0] < max_q[30:0])
+                  if(ram_data_out[30:0] < max_q[30:0]) begin
                     max_q <= ram_data_out;
+                    max_q_index <= ram_address;
+                  end
                 end
                 learn_state <= get_max_candidate;
                 i_action <= i_action + 1;
@@ -684,21 +695,20 @@ module hardware_accelerator(
             max_is_operating <= 0;
             i_action <= 0;
           end
-        end
-        else
-        begin
-          output_learn_done_reg <= 1;
-          output_learn_reg <= max_q;
-          if(output_learn_done) begin
-            ram_read_enable_reg <= 0;
-            output_learn_done_reg <= 0;
-            delay_out <= 1;
+        end else begin
+          if(~delay_out) begin
+            output_learn_done_reg <= 1;
+            output_learn_reg <= max_q_index % 4;
+            if(output_learn_done) begin
+              ram_read_enable_reg <= 0;
+              output_learn_done_reg <= 0;
+              delay_out <= 1;
+            end
+          end else begin
+            delay_out <= 0;
+            seeking_max <= 0;
+            i_action <= 0;
           end
-        end
-        if(delay_out) begin
-          delay_out <= 0;
-          seeking_max <= 0;
-          i_action <= 0;
         end
         not_first_time_read_max <= 0;
       end
