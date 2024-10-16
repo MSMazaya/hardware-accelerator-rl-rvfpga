@@ -336,11 +336,13 @@ module hardware_accelerator(
             constant_update_state_delay_done = 1'd1;
   parameter constant_update_learning_rate = 2'd0,
             constant_update_discount_factor = 2'd1,
-            constant_update_next_state = 2'd2;
+            constant_update_next_state = 2'd2,
+            constant_update_a_max = 2'd3;
   reg signed [31:0] learning_rate;
   reg learning_rate_stored;
   reg [31:0] discount_factor;
   reg [31:0] q_next_state;
+  reg [31:0] a_max;
   reg q_next_state_stored;
 
   // Q UPDATE
@@ -380,7 +382,7 @@ module hardware_accelerator(
   parameter get_max_candidate     = 1'd0,
             compare_max_candidate = 1'd1;
   reg       not_first_time_read_max;
-  reg       [2:0]i_action;
+  reg       [31:0]i_action;
   reg       [31:0]max_q;
   reg       [31:0]max_q_index;
   reg       delay_out;
@@ -413,6 +415,8 @@ module hardware_accelerator(
             end
             constant_update_discount_factor:
               discount_factor <= input_reg2;
+            constant_update_a_max:
+              a_max <= input_reg2;
             constant_update_next_state:
             begin
               q_next_state <= input_reg2;
@@ -474,7 +478,7 @@ module hardware_accelerator(
       if(~max_is_operating && ~is_learn) begin
         max_is_operating <= 1;
         // WARN: check if its actually flooring?
-        address_from_update <= (q_next_state/4)*4;
+        address_from_update <= (q_next_state/a_max)*a_max;
         next_max_q_is_operating <= 1;
       end
 
@@ -647,7 +651,7 @@ module hardware_accelerator(
       end
     end 
     if(seeking_max) begin
-      if(i_action != 4) begin
+      if(i_action != a_max) begin
         case(learn_state)
           get_max_candidate:
           begin
@@ -707,7 +711,7 @@ module hardware_accelerator(
         end else begin
           if(~delay_out) begin
             output_learn_done_reg <= 1;
-            output_learn_reg <= max_q_index % 4;
+            output_learn_reg <= max_q_index % a_max;
             if(output_learn_done) begin
               ram_read_enable_reg <= 0;
               output_learn_done_reg <= 0;
